@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { imageSize } from "image-size";
 import type { Database } from "@/integrations/supabase/types";
 import { hasValueStock, parseStock, totalFromValues } from "@/lib/stock";
+import { LIBYAN_MOBILE, normalizeLibyanPhone } from "@/lib/phone";
 
 export const WHATSAPP_NUMBER = "218935533599";
 
@@ -100,6 +101,24 @@ export type MenuItem = {
   discount: { ends_at: string | null } | null;
 };
 
+// The photo shown on a product's card. Normally the main photo; when the owner added photos
+// only as extra photos or only on the values (colours), the first of those is used, so a
+// product that has any photo at all never shows an empty box.
+export function coverImage(item: {
+  image_url: string | null;
+  extra_images?: string[];
+  variables?: { values: { image_url: string | null }[] }[];
+}): string | null {
+  if (item.image_url) return item.image_url;
+  const extra = (item.extra_images ?? []).find(Boolean);
+  if (extra) return extra;
+  for (const v of item.variables ?? []) {
+    const withPhoto = v.values.find((x) => x.image_url);
+    if (withPhoto) return withPhoto.image_url;
+  }
+  return null;
+}
+
 // What a customer pays without a code: the sale price when there is one.
 export function effectivePrice(item: { price: number; sale_price: number | null }) {
   return item.sale_price !== null && item.sale_price < Number(item.price)
@@ -114,6 +133,28 @@ function parseSalePrice(raw: unknown, regular: number): number | null {
   if (!Number.isFinite(n) || n < 0) throw new Error("السعر بعد الخصم غير صحيح");
   if (n >= regular) throw new Error("السعر بعد الخصم يجب أن يكون أقل من السعر الأصلي");
   return Math.round(n * 100) / 100;
+}
+
+// The photo that shows exactly what was ordered: the chosen value's own photo (e.g. the red
+// shade) when it has one, otherwise the product's card photo.
+function photoForChoice(
+  product: {
+    image_url?: string | null;
+    extra_images?: string[] | null;
+    variables: ProductVariant[];
+  },
+  options: OrderOption[] | undefined,
+): string | null {
+  for (const v of product.variables) {
+    const pick = options?.find((o) => o.name === v.name);
+    const value = pick ? v.values.find((x) => x.label === pick.value) : undefined;
+    if (value?.image_url) return value.image_url;
+  }
+  return coverImage({
+    image_url: product.image_url ?? null,
+    extra_images: product.extra_images ?? [],
+    variables: product.variables,
+  });
 }
 
 export type AdminDiscount = {
@@ -176,11 +217,14 @@ export type OrderRow = {
   notes: string | null;
   location_url: string | null;
   items: {
+    id?: string;
     name: string;
     qty: number;
     price: number;
     options?: OrderOption[];
     discount_code?: string;
+    // the photo of this line as ordered (the chosen colour's photo, else the product photo)
+    image_url?: string;
   }[];
   total: number;
   status: string;
@@ -328,18 +372,19 @@ export const createOrder = createServerFn({ method: "POST" })
     }) => input,
   )
   .handler(async ({ data }) => {
+    // Arabic keypad digits, "+218…", spaces: the same number however it was typed.
+    const phone = normalizeLibyanPhone(String(data.phone ?? ""));
     const { isAdminPhone } = await import("@/lib/admin.server");
-    if (isAdminPhone(data.phone)) {
+    if (isAdminPhone(phone)) {
       // Admin trigger code: don't log this as a real customer order, and skip every
       // validation rule below that a real order would need to satisfy.
       return { id: "admin", isAdmin: true as const };
     }
 
     const name = data.customer_name?.trim();
-    const phone = data.phone?.trim();
     const address = data.address?.trim();
     if (!name) throw new Error("الاسم مطلوب");
-    if (!phone || !/^(091|092|093|094)\d{7}$/.test(phone)) {
+    if (!LIBYAN_MOBILE.test(phone)) {
       throw new Error("رقم الهاتف يجب أن يتكون من 10 أرقام ويبدأ بـ 091 أو 092 أو 093 أو 094");
     }
     if (!address) throw new Error("العنوان مطلوب");
@@ -361,6 +406,7 @@ export const createOrder = createServerFn({ method: "POST" })
       price: number;
       options?: OrderOption[];
       discount_code?: string;
+      image_url?: string;
     };
     const cleanItems: CleanItem[] = data.items.map((i) => ({
       ...(i.id ? { id: i.id } : {}),
@@ -378,9 +424,12 @@ export const createOrder = createServerFn({ method: "POST" })
         variables?: unknown;
         min_qty?: number;
         sale_price?: number | null;
+        image_url?: string | null;
+        extra_images?: string[] | null;
       };
       let rows: ProductRow[] = [];
       for (const cols of [
+        "id,name,price,sale_price,variables,min_qty,image_url,extra_images",
         "id,name,price,sale_price,variables,min_qty",
         "id,name,price,variables,min_qty",
         "id,name,price,variables",
@@ -434,6 +483,11 @@ export const createOrder = createServerFn({ method: "POST" })
           }
           clean.options = chosen;
         }
+
+        // saved with the order, so the owner sees exactly what was ordered even if the
+        // product's photos change later (shown on the order's photo page, /o/<id>)
+        const photo = photoForChoice({ ...row, variables }, clean.options);
+        if (photo) clean.image_url = photo;
 
         // price: the discount price only with a valid, unexpired code; otherwise the regular one
         let price = effectivePrice({
@@ -522,6 +576,95 @@ export const createOrder = createServerFn({ method: "POST" })
     return { id: result.data.id as string, isAdmin: false as const };
   });
 
+// ---------- the photos of one order (the page linked from the WhatsApp message) ----------
+
+export type OrderPhotos = {
+  items: {
+    name: string;
+    qty: number;
+    price: number;
+    options: OrderOption[];
+    image_url: string | null;
+  }[];
+  total: number;
+  created_at: string;
+  // a small photo for WhatsApp's link preview
+  preview_image: string | null;
+};
+
+const ORDER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Only what was ordered — no name, phone or address — so the link is safe to forward. Order
+// ids are long random codes, so pages can't be found by guessing.
+export const getOrderPhotos = createServerFn({ method: "GET" })
+  .inputValidator((input: { id: string }) => {
+    if (!ORDER_ID.test(String(input?.id ?? ""))) throw new Error("رابط غير صحيح");
+    return input;
+  })
+  .handler(async ({ data }): Promise<OrderPhotos | null> => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: row, error } = await supabaseAdmin
+      .from("orders")
+      .select("items,total,created_at")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!row) return null;
+    const items = (Array.isArray(row.items) ? row.items : []) as unknown as OrderRow["items"];
+
+    // Orders placed before photos were saved with them: look the photos up from the products.
+    const missing = [...new Set(items.filter((i) => !i.image_url && i.id).map((i) => i.id!))];
+    const products = new Map<
+      string,
+      { image_url: string | null; extra_images: string[] | null; variables: ProductVariant[] }
+    >();
+    if (missing.length > 0) {
+      const res = await supabaseAdmin
+        .from("menu_items")
+        .select("id,image_url,extra_images,variables")
+        .in("id", missing);
+      for (const p of (res.data ?? []) as unknown as {
+        id: string;
+        image_url: string | null;
+        extra_images: string[] | null;
+        variables: unknown;
+      }[]) {
+        products.set(p.id, { ...p, variables: normalizeVariables(p.variables) });
+      }
+    }
+
+    const out = items.map((i) => {
+      const product = i.id ? products.get(i.id) : undefined;
+      return {
+        name: String(i.name ?? ""),
+        qty: Number(i.qty) || 0,
+        price: Number(i.price) || 0,
+        options: Array.isArray(i.options) ? i.options : [],
+        image_url: i.image_url ?? (product ? photoForChoice(product, i.options) : null),
+      };
+    });
+
+    // WhatsApp only shows a preview for a small enough photo: use the light copy when it exists.
+    const first = out.find((i) => i.image_url)?.image_url ?? null;
+    let preview = first;
+    const name = first ? ownPhotoName(first) : null;
+    if (name) {
+      const light = `${photoPrefix()}thumbs/${name}`;
+      try {
+        const res = await fetch(light, { method: "HEAD" });
+        if (res.ok) preview = light;
+      } catch {
+        // keep the full photo
+      }
+    }
+    return {
+      items: out,
+      total: Number(row.total) || 0,
+      created_at: row.created_at,
+      preview_image: preview,
+    };
+  });
+
 export const listOrders = createServerFn({ method: "POST" })
   .inputValidator((input: { phone: string }) => input)
   .handler(async ({ data }) => {
@@ -587,14 +730,32 @@ export const saveMenuItem = createServerFn({ method: "POST" })
       }
       if (fnError) throw new Error(fnError.message);
     }
+    // A product saved with extra photos but no main photo gets its first extra photo as the
+    // main one, so its card is never empty.
+    let mainImage = data.item.image_url?.trim() || null;
+    let mainRatio = data.item.image_ratio ?? null;
+    let extraImages = (data.item.extra_images ?? []).map((u) => u.trim());
+    let extraRatios = data.item.extra_image_ratios ?? [];
+    if (!mainImage) {
+      const first = extraImages.findIndex(Boolean);
+      if (first !== -1) {
+        mainImage = extraImages[first]!;
+        mainRatio = extraRatios[first] ?? null;
+        extraImages = extraImages.filter((_, i) => i !== first);
+        extraRatios = extraRatios.filter((_, i) => i !== first);
+      }
+    }
+    // drop empty addresses, keeping each remaining photo next to its own shape
+    extraRatios = extraRatios.filter((_, i) => Boolean(extraImages[i]));
+    extraImages = extraImages.filter(Boolean);
     const payload = {
       name: data.item.name.trim().slice(0, 120),
       description: data.item.description?.trim().slice(0, 500) ?? null,
       price: Number(data.item.price) || 0,
-      image_url: data.item.image_url?.trim() || null,
-      image_ratio: data.item.image_ratio ?? null,
-      extra_images: (data.item.extra_images ?? []).map((u) => u.trim()).filter(Boolean),
-      extra_image_ratios: data.item.extra_image_ratios ?? [],
+      image_url: mainImage,
+      image_ratio: mainRatio,
+      extra_images: extraImages,
+      extra_image_ratios: extraRatios,
       category: data.item.category?.trim().slice(0, 60) || "مفروشات",
       sort_order: Number(data.item.sort_order) || 0,
       is_available: data.item.is_available ?? true,
@@ -706,9 +867,34 @@ export const deleteMenuItem = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+// Uploaded photos never change (each gets a new random name), so phones may keep them for a
+// year: a returning customer sees the photos instantly, without downloading them again.
+const PHOTO_CACHE_SECONDS = "31536000";
+
+// Address prefix of the shop's own uploaded photos. Light copies live in its thumbs/ folder,
+// under the same file name (see src/lib/photos.ts).
+function photoPrefix() {
+  return `${process.env["SUPABASE_URL"]!.replace(/\/+$/, "")}/storage/v1/object/public/menu-photos/`;
+}
+
+// File name of one of the shop's own photos, or null for any other address.
+function ownPhotoName(url: string): string | null {
+  const prefix = photoPrefix();
+  if (typeof url !== "string" || !url.startsWith(prefix)) return null;
+  const name = url.slice(prefix.length);
+  return /^[A-Za-z0-9._-]+$/.test(name) ? name : null;
+}
+
 export const uploadMenuImage = createServerFn({ method: "POST" })
   .inputValidator(
-    (input: { phone: string; filename: string; contentType: string; dataBase64: string }) => {
+    (input: {
+      phone: string;
+      filename: string;
+      contentType: string;
+      dataBase64: string;
+      // the light copy for cards, made by the browser from the same crop
+      thumbBase64?: string;
+    }) => {
       if (!input.dataBase64?.trim()) throw new Error("لا توجد صورة");
       return input;
     },
@@ -721,13 +907,70 @@ export const uploadMenuImage = createServerFn({ method: "POST" })
     const ext =
       (data.filename.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
     const path = `${crypto.randomUUID()}.${ext}`;
-    const { error } = await db.storage
-      .from("menu-photos")
-      .upload(path, bytes, { contentType: data.contentType || "image/jpeg", upsert: false });
+    const { error } = await db.storage.from("menu-photos").upload(path, bytes, {
+      contentType: data.contentType || "image/jpeg",
+      upsert: false,
+      cacheControl: PHOTO_CACHE_SECONDS,
+    });
     if (error) throw new Error(error.message);
+    if (data.thumbBase64?.trim()) {
+      // Best effort: without it the cards simply show the full photo, and the control panel
+      // creates the missing light copy later.
+      const thumb = Buffer.from(data.thumbBase64, "base64");
+      if (thumb.byteLength <= 400 * 1024) {
+        await db.storage
+          .from("menu-photos")
+          .upload(`thumbs/${path}`, thumb, {
+            contentType: "image/jpeg",
+            upsert: true,
+            cacheControl: PHOTO_CACHE_SECONDS,
+          })
+          .catch(() => null);
+      }
+    }
     const { data: pub } = db.storage.from("menu-photos").getPublicUrl(path);
     const ratio = getImageRatio(bytes);
     return { url: pub.publicUrl, ratio };
+  });
+
+// Stores the light copy of a photo that was uploaded before light copies existed. The copy
+// is made in the owner's browser (src/lib/thumbs.ts); this only saves it next to the photo.
+export const saveThumbnail = createServerFn({ method: "POST" })
+  .inputValidator((input: { phone: string; url: string; dataBase64: string }) => {
+    if (!input.dataBase64?.trim()) throw new Error("لا توجد صورة");
+    return input;
+  })
+  .handler(async ({ data }) => {
+    const db = await adminClient(data.phone);
+    const name = ownPhotoName(data.url);
+    if (!name) throw new Error("ليست من صور المتجر");
+    const bytes = Buffer.from(data.dataBase64, "base64");
+    if (bytes.byteLength > 400 * 1024) throw new Error("النسخة الخفيفة أكبر من المتوقع");
+    const { error } = await db.storage.from("menu-photos").upload(`thumbs/${name}`, bytes, {
+      contentType: "image/jpeg",
+      upsert: true,
+      cacheControl: PHOTO_CACHE_SECONDS,
+    });
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+// Hands one of the shop's own photos to the owner's browser, for when the browser isn't
+// allowed to read it directly from storage. Only the shop's photos, only for the admin.
+export const fetchPhotoForThumb = createServerFn({ method: "POST" })
+  .inputValidator((input: { phone: string; url: string }) => input)
+  .handler(async ({ data }) => {
+    await adminClient(data.phone);
+    if (!ownPhotoName(data.url)) throw new Error("ليست من صور المتجر");
+    const res = await fetch(data.url);
+    if (!res.ok) return { ok: false as const, status: res.status };
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.byteLength > 8 * 1024 * 1024) return { ok: false as const, status: 413 };
+    return {
+      ok: true as const,
+      base64: bytes.toString("base64"),
+      contentType: res.headers.get("content-type") || "image/jpeg",
+    };
   });
 
 const DEFAULT_STORY = {
@@ -786,8 +1029,9 @@ export const getStorySection = createServerFn({ method: "GET" }).handler(async (
     story_title: settings.data?.story_title ?? DEFAULT_STORY.story_title,
     story_text: settings.data?.story_text ?? DEFAULT_STORY.story_text,
     hero_image_url: settings.data?.hero_image_url ?? null,
-    hero_title: settings.data?.hero_title || DEFAULT_HERO.hero_title,
-    hero_subtitle: settings.data?.hero_subtitle || DEFAULT_HERO.hero_subtitle,
+    // null = never edited (built-in wording); "" = the owner cleared it, so nothing is shown
+    hero_title: settings.data?.hero_title ?? DEFAULT_HERO.hero_title,
+    hero_subtitle: settings.data?.hero_subtitle ?? DEFAULT_HERO.hero_subtitle,
     images: (promos.data ?? []) as Promotion[],
   };
 });
@@ -801,9 +1045,10 @@ export const saveStorySettings = createServerFn({ method: "POST" })
     const db = await adminClient(data.phone);
     const { error } = await db.from("site_settings").upsert({
       id: 1,
-      story_label: data.story_label.trim().slice(0, 60) || DEFAULT_STORY.story_label,
-      story_title: data.story_title.trim().slice(0, 120) || DEFAULT_STORY.story_title,
-      story_text: data.story_text.trim().slice(0, 800) || DEFAULT_STORY.story_text,
+      // Saved exactly as typed: an emptied field stays empty and is hidden on the site.
+      story_label: (data.story_label ?? "").trim().slice(0, 60),
+      story_title: (data.story_title ?? "").trim().slice(0, 120),
+      story_text: (data.story_text ?? "").trim().slice(0, 800),
     });
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -901,8 +1146,9 @@ export const saveHeroText = createServerFn({ method: "POST" })
     const db = await adminClient(data.phone);
     const { error } = await db.from("site_settings").upsert({
       id: 1,
-      hero_title: data.hero_title.trim().slice(0, 120) || DEFAULT_HERO.hero_title,
-      hero_subtitle: data.hero_subtitle.trim().slice(0, 400) || DEFAULT_HERO.hero_subtitle,
+      // Saved exactly as typed: an emptied line stays empty and is hidden on the site.
+      hero_title: (data.hero_title ?? "").trim().slice(0, 120),
+      hero_subtitle: (data.hero_subtitle ?? "").trim().slice(0, 400),
     });
     if (isMissingColumn(error)) {
       throw new Error("يرجى تشغيل تحديث قاعدة البيانات أولاً (Supabase → SQL Editor)");
