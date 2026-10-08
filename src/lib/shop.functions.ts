@@ -179,6 +179,24 @@ function isActive(endsAt: string | null) {
 
 // PostgREST error codes for "that column doesn't exist (yet)". Lets the site keep working in
 // the window between shipping this code and running the matching database migration.
+// The database is missing a table, column or function this code needs. The message names the
+// Supabase project the site is really connected to (each store has its own), so the SQL is
+// run in the right one, and keeps the technical reason at the end for diagnosing.
+function sqlNeeded(error?: { message?: string } | null) {
+  let project = "";
+  try {
+    project = new URL(process.env["SUPABASE_URL"] ?? "").hostname.split(".")[0] ?? "";
+  } catch {
+    project = "";
+  }
+  return new Error(
+    `قاعدة البيانات ينقصها تحديث: شغّلي ملف alrabhi-database.sql في Supabase (SQL Editor)` +
+      (project ? ` داخل المشروع ${project}` : "") +
+      ` ثم حاولي مرة أخرى.` +
+      (error?.message ? ` (${error.message})` : ""),
+  );
+}
+
 function isMissingColumn(error: { code?: string; message?: string } | null) {
   if (!error) return false;
   return (
@@ -723,11 +741,7 @@ export const saveMenuItem = createServerFn({ method: "POST" })
       // Quantities per value are only safe once the database can deduct them on each order.
       // Calling the function with an empty order changes nothing; it only proves it exists.
       const { error: fnError } = await db.rpc(RESERVE_V2, { p_items: [] });
-      if (fnError?.code === "PGRST202") {
-        throw new Error(
-          "لحفظ كمية لكل قيمة شغّلي ملف تحديث قاعدة البيانات الجديد (value_stock) في Supabase أولاً",
-        );
-      }
+      if (fnError?.code === "PGRST202") throw sqlNeeded(fnError);
       if (fnError) throw new Error(fnError.message);
     }
     // A product saved with extra photos but no main photo gets its first extra photo as the
@@ -809,11 +823,8 @@ export const saveMenuItem = createServerFn({ method: "POST" })
 
     // Newer columns may not be migrated onto the live database yet. Retry without them one
     // generation at a time, but never silently drop a setting the owner actually used.
-    const needMigration = () =>
-      new Error(
-        "شغّلي ملفات تحديث قاعدة البيانات الجديدة في Supabase (SQL Editor) ثم احفظي مرة أخرى",
-      );
     let result = await write(payload);
+    const needMigration = () => sqlNeeded(result.error);
     if (isMissingColumn(result.error)) {
       if (payload.sale_price !== null) throw needMigration();
       const { sale_price: _sale, ...noSale } = payload;
@@ -849,9 +860,8 @@ export const saveMenuItem = createServerFn({ method: "POST" })
       if (discountError) {
         if (!isMissingColumn(discountError)) throw new Error(discountError.message);
         if (discount) {
-          throw new Error(
-            "تم حفظ المنتج، لكن لحفظ كود الخصم شغّلي ملف تحديث قاعدة البيانات الجديد في Supabase أولاً",
-          );
+          const why = sqlNeeded(discountError);
+          throw new Error(`تم حفظ المنتج، لكن كود الخصم لم يُحفظ. ${why.message}`);
         }
       }
     }
@@ -1100,7 +1110,7 @@ export const saveHeroImage = createServerFn({ method: "POST" })
       .from("site_settings")
       .upsert({ id: 1, hero_image_url: data.hero_image_url?.trim() || null });
     if (isMissingColumn(error)) {
-      throw new Error("يرجى تشغيل تحديث قاعدة البيانات أولاً (Supabase → SQL Editor)");
+      throw sqlNeeded(error);
     }
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -1134,7 +1144,7 @@ export const saveCategoryImage = createServerFn({ method: "POST" })
         { onConflict: "name" },
       );
     if (isMissingColumn(error)) {
-      throw new Error("شغّلي ملف تحديث قاعدة البيانات الجديد في Supabase (SQL Editor) أولاً");
+      throw sqlNeeded(error);
     }
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -1151,7 +1161,7 @@ export const saveHeroText = createServerFn({ method: "POST" })
       hero_subtitle: (data.hero_subtitle ?? "").trim().slice(0, 400),
     });
     if (isMissingColumn(error)) {
-      throw new Error("يرجى تشغيل تحديث قاعدة البيانات أولاً (Supabase → SQL Editor)");
+      throw sqlNeeded(error);
     }
     if (error) throw new Error(error.message);
     return { ok: true };
