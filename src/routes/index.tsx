@@ -3,6 +3,7 @@ import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, Plus, Search, ShoppingBag, X } from "lucide-react";
 import {
+  coverImage,
   effectivePrice,
   getCategories,
   getMenu,
@@ -11,11 +12,16 @@ import {
 } from "@/lib/shop.functions";
 import { LogoIntro } from "@/components/LogoIntro";
 import { Carousel } from "@/components/Carousel";
+import { Photo, PhotoGroup } from "@/components/Photo";
+import { LetterPicker } from "@/components/LetterPicker";
 import { BookingDialog } from "@/components/BookingDialog";
 import { ProductSheet, formatPrice, type AppliedDiscount } from "@/components/ProductSheet";
 import { SocialLinks } from "@/components/SocialLinks";
 import { optionsLabel, useCart, type CartOption } from "@/lib/cart";
 import { buildSearchIndex, searchProducts } from "@/lib/search";
+import { letterOf, sortByName } from "@/lib/sort";
+import { preloadAll, thumbUrl } from "@/lib/photos";
+import { arCount } from "@/lib/utils";
 import { keepLayer, useCloseLayer, useLockScroll, withLayer } from "@/lib/back-layer";
 import { overStockValue, remainingForChoice } from "@/lib/stock";
 import { WHATSAPP_NUMBER } from "@/lib/whatsapp";
@@ -52,34 +58,33 @@ export const Route = createFileRoute("/")({
     ]),
   head: () => ({
     meta: [
-      { title: "Glamour with Jannat | مكياج وعناية بالبشرة" },
+      { title: "الرابحي للمفروشات | مفروشات لبيت مريح وأنيق" },
       {
         name: "description",
         content:
-          "Glamour with Jannat — مكياج، عناية بالبشرة، عطور وعناية بالشعر. توصيل لجميع أنحاء ليبيا، اطلبي عبر واتساب.",
+          "الرابحي للمفروشات — مفروشات مختارة بعناية. توصيل لجميع أنحاء ليبيا، اطلبوا عبر واتساب.",
       },
-      { property: "og:title", content: "Glamour with Jannat" },
+      { property: "og:title", content: "الرابحي للمفروشات" },
       {
         property: "og:description",
-        content: "جمالك يستحق الأفضل — تسوّقي الآن من Glamour with Jannat.",
+        content: "راحة بيتك تبدأ من هنا — تسوّقوا الآن من الرابحي للمفروشات.",
       },
     ],
   }),
   component: Home,
 });
 
-// Arabic number agreement: 1 منتج واحد، 2 منتجان، 3–10 منتجات، 11+ منتج
-function arCount(n: number, [one, two, few, many]: [string, string, string, string]) {
-  if (n === 1) return one;
-  if (n === 2) return two;
-  if (n >= 3 && n <= 10) return `${n} ${few}`;
-  return `${n} ${many}`;
-}
-
 function Home() {
-  const { data: menu } = useSuspenseQuery(menuQuery);
-  const { data: story } = useSuspenseQuery(storyQuery);
-  const { data: categoryInfo } = useSuspenseQuery(categoriesQuery);
+  // The page arrives with its data already loaded (see `loader` above). Handing that data to
+  // the queries lets the page start working at once; before, the browser downloaded all three
+  // lists a second time first, and nothing on the page responded until that finished.
+  const [menuFromPage, storyFromPage, categoriesFromPage] = Route.useLoaderData();
+  const { data: menu } = useSuspenseQuery({ ...menuQuery, initialData: menuFromPage });
+  const { data: story } = useSuspenseQuery({ ...storyQuery, initialData: storyFromPage });
+  const { data: categoryInfo } = useSuspenseQuery({
+    ...categoriesQuery,
+    initialData: categoriesFromPage,
+  });
   const { cat, p, panel } = Route.useSearch();
   const navigate = useNavigate();
   const closeLayer = useCloseLayer();
@@ -91,6 +96,8 @@ function Home() {
   const [limitHit, setLimitHit] = useState<string | null>(null);
   const [menuPrompt, setMenuPrompt] = useState(false);
   const [query, setQuery] = useState("");
+  // the product the customer just jumped to with the letter list (outlined for a moment)
+  const [jumpedTo, setJumpedTo] = useState<string | null>(null);
   const shopRef = useRef<HTMLElement>(null);
 
   const available = useMemo(() => menu.filter((m) => m.is_available), [menu]);
@@ -134,13 +141,54 @@ function Home() {
       const items = available.filter((m) => m.category === name);
       const photo =
         categoryInfo.find((c) => c.name === name)?.image_url ??
-        items.find((m) => m.image_url)?.image_url ??
+        items.map(coverImage).find(Boolean) ??
         null;
       return { name, items, photo };
     });
   }, [available, categoryInfo]);
 
   const activeCategory = categories.find((c) => c.name === cat) ?? null;
+  // Products inside a category are listed alphabetically.
+  const categoryItems = useMemo(
+    () => (activeCategory ? sortByName(activeCategory.items) : []),
+    [activeCategory],
+  );
+  const categoryLetters = useMemo(
+    () => [...new Set(categoryItems.map((m) => letterOf(m.name)))],
+    [categoryItems],
+  );
+
+  // Letter list → scroll to the first product that starts with the chosen letter.
+  function jumpToLetter(letter: string) {
+    const target = categoryItems.find((m) => letterOf(m.name) === letter);
+    if (!target) return;
+    document
+      .getElementById(`product-${target.id}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    flash(setJumpedTo, target.id, 1800);
+  }
+
+  // Fetch the light copies of every category and product photo in the background, in the
+  // order they're shown, so a category's photos are already on the phone when it's opened
+  // and appear at once. Skipped for customers who asked their phone to save data.
+  useEffect(() => {
+    const saveData = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection
+      ?.saveData;
+    if (saveData) return;
+    const urls: string[] = [];
+    for (const c of categories) urls.push(thumbUrl(c.photo) ?? "");
+    for (const c of categories)
+      for (const m of sortByName(c.items)) urls.push(thumbUrl(coverImage(m)) ?? "");
+    let stop = () => {};
+    // a moment's head start for the photos already on screen
+    const timer = window.setTimeout(() => {
+      stop = preloadAll(urls.filter(Boolean));
+    }, 300);
+    return () => {
+      window.clearTimeout(timer);
+      stop();
+    };
+  }, [categories]);
 
   const searchIndex = useMemo(() => buildSearchIndex(available), [available]);
   const results = useMemo(
@@ -184,14 +232,14 @@ function Home() {
       const chosen = l.options?.find((o) => o.name === v.name);
       return !chosen || !v.values.some((x) => x.label === chosen.value);
     });
-    if (optionsStale) return "تغيّرت خيارات هذا المنتج، احذفيه وأضيفيه من جديد";
+    if (optionsStale) return "تغيّرت خيارات هذا المنتج، احذفوه وأضيفوه من جديد";
     if (l.discount_code) {
       const d = product.discount;
       if (!d || (d.ends_at && new Date(d.ends_at).getTime() <= Date.now())) {
-        return "انتهى الخصم على هذا المنتج، احذفيه وأضيفيه من جديد";
+        return "انتهى الخصم على هذا المنتج، احذفوه وأضيفوه من جديد";
       }
     } else if (Math.abs(l.price - effectivePrice(product)) > 0.005) {
-      return "تغيّر سعر هذا المنتج، احذفيه وأضيفيه من جديد";
+      return "تغيّر سعر هذا المنتج، احذفوه وأضيفوه من جديد";
     }
     return null;
   }
@@ -225,7 +273,7 @@ function Home() {
         id: item.id,
         name: item.name,
         price: effectivePrice(item),
-        image_url: item.image_url,
+        image_url: coverImage(item),
         ...(item.sale_price !== null ? { regular_price: Number(item.price) } : {}),
       },
       qty,
@@ -248,7 +296,7 @@ function Home() {
         id: item.id,
         name: item.name,
         price: discount ? discount.price : effectivePrice(item),
-        image_url: valueImage ?? item.image_url,
+        image_url: valueImage ?? coverImage(item),
         options,
         ...(discount ? { discount_code: discount.code } : {}),
         ...(discount || item.sale_price !== null ? { regular_price: Number(item.price) } : {}),
@@ -291,25 +339,26 @@ function Home() {
         {items.map((item) => {
           const soldOut = item.stock === 0;
           const firstVariable = item.variables[0];
-          const cardImage =
-            item.image_url ??
-            item.extra_images[0] ??
-            item.variables.flatMap((v) => v.values).find((x) => x.image_url)?.image_url ??
-            null;
+          const cover = coverImage(item);
           return (
-            <li key={item.id} className={soldOut ? "opacity-60" : ""}>
+            <li
+              key={item.id}
+              id={`product-${item.id}`}
+              className={`scroll-mt-48 rounded-2xl transition-shadow duration-300 ${
+                soldOut ? "opacity-60" : ""
+              } ${jumpedTo === item.id ? "ring-2 ring-primary ring-offset-4 ring-offset-background" : ""}`}
+            >
               <div className="relative">
                 <button
                   type="button"
                   onClick={() => setSheetItem(item)}
                   aria-label={item.name}
-                  className="block aspect-[3/4] w-full overflow-hidden rounded-2xl bg-muted"
+                  className="photo-slot block aspect-[3/4] w-full overflow-hidden rounded-2xl bg-muted"
                 >
-                  {cardImage && (
-                    <img
-                      src={cardImage}
-                      alt=""
-                      loading="lazy"
+                  {cover && (
+                    <Photo
+                      thumb
+                      src={cover}
                       className={`h-full w-full object-cover ${soldOut ? "grayscale" : ""}`}
                     />
                   )}
@@ -335,7 +384,7 @@ function Home() {
                   <button
                     type="button"
                     onClick={() => handleQuickAdd(item)}
-                    aria-label={`أضيفي ${item.name} للسلة`}
+                    aria-label={`أضيفوا ${item.name} للسلة`}
                     className={`absolute bottom-2 left-2 flex h-10 min-w-10 items-center justify-center gap-1 rounded-full px-2.5 text-sm font-bold shadow-[0_6px_16px_-6px_rgba(0,0,0,0.45)] transition-colors ${
                       limitHit === item.id
                         ? "bg-card text-muted-foreground"
@@ -413,11 +462,10 @@ function Home() {
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <button
             type="button"
-            dir="ltr"
             onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-            className="font-logo text-[22px] leading-none font-black tracking-tight text-primary"
+            className="font-logo text-[24px] leading-none font-extrabold text-primary"
           >
-            GLAMOUR
+            الرابحي
           </button>
           <button
             type="button"
@@ -453,25 +501,29 @@ function Home() {
         )}
         <div className="mx-auto grid max-w-5xl gap-12 px-5 pt-12 pb-16 md:grid-cols-[1.15fr_1fr] md:items-center md:pb-20">
           <div>
-            <p className="text-[15px] font-medium text-white/90">{story.hero_title}</p>
-            {/* set like the logo: heavy GLAMOUR, signature "With Jannat" tucked under it */}
-            <h1 dir="ltr" className="mt-3 text-right">
-              <span className="font-logo block text-[clamp(2.6rem,15.5vw,4.25rem)] leading-[0.95] font-black tracking-tight whitespace-nowrap md:text-[6.5vw] lg:text-[5.25rem]">
-                GLAMOUR
+            {story.hero_title && (
+              <p className="text-[15px] font-medium text-white/90">{story.hero_title}</p>
+            )}
+            {/* set like the logo: heavy Kufic name, "للمفروشات" under it */}
+            <h1 className="mt-3">
+              <span className="font-logo block text-[clamp(3rem,17vw,5rem)] leading-[1.3] font-extrabold md:text-[7.5vw] lg:text-[6rem]">
+                الرابحي
               </span>
-              <span className="font-script -mt-1 block text-[clamp(2.25rem,11vw,3.25rem)] leading-none font-normal text-white/95 md:text-6xl">
-                With Jannat
+              <span className="font-logo block text-[clamp(1.35rem,6.5vw,2rem)] leading-tight font-extrabold text-white/90">
+                للمفروشات
               </span>
             </h1>
-            <p className="mt-6 max-w-md text-[17px] leading-8 text-white/90">
-              {story.hero_subtitle}
-            </p>
+            {story.hero_subtitle && (
+              <p className="mt-6 max-w-md text-[17px] leading-8 text-white/90">
+                {story.hero_subtitle}
+              </p>
+            )}
             <button
               type="button"
               onClick={() => showCategory()}
               className="mt-8 h-14 rounded-full bg-white px-9 text-base font-extrabold text-primary shadow-[0_14px_30px_-14px_rgba(0,0,0,0.45)] transition-transform hover:scale-[1.02]"
             >
-              تصفّحي المنتجات
+              تصفّحوا المنتجات
             </button>
           </div>
 
@@ -485,12 +537,7 @@ function Home() {
                 />
               </div>
               <div className="flex items-center justify-between px-3 pb-1">
-                <span
-                  dir="ltr"
-                  className="font-logo text-xs font-black tracking-tight text-primary"
-                >
-                  GLAMOUR
-                </span>
+                <span className="font-logo text-sm font-extrabold text-primary">الرابحي</span>
                 <span className="text-xs text-muted-foreground">عروضنا</span>
               </div>
             </div>
@@ -502,29 +549,40 @@ function Home() {
       <section id="menu" ref={shopRef} className="scroll-mt-14">
         <div className="sticky top-14 z-20 border-b border-border/70 bg-background/95 backdrop-blur-md">
           <div className="mx-auto max-w-5xl px-4 py-3">
-            <label className="relative block">
-              <span className="sr-only">ابحثي عن منتج</span>
-              <Search className="pointer-events-none absolute top-1/2 right-4 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="search"
-                dir="auto"
-                enterKeyHint="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="ابحثي عن منتج، لون أو قسم / Search"
-                className="h-12 w-full rounded-full border border-border bg-card ps-11 pe-11 text-[16px] text-ink outline-none placeholder:text-muted-foreground focus:border-primary"
-              />
-              {query && (
-                <button
-                  type="button"
-                  onClick={() => setQuery("")}
-                  aria-label="مسح البحث"
-                  className="absolute top-1/2 left-2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+            {/* The letter list sits here, in the bar that stays on screen, so another letter
+                can be picked from anywhere in a long category without scrolling back up. */}
+            <div className="flex items-center gap-2">
+              <label className="relative block min-w-0 flex-1">
+                <span className="sr-only">ابحثوا عن منتج</span>
+                <Search className="pointer-events-none absolute top-1/2 right-4 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="search"
+                  dir="auto"
+                  enterKeyHint="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder={
+                    activeCategory && !results && categoryLetters.length > 1
+                      ? "ابحثوا عن منتج / Search"
+                      : "ابحثوا عن منتج، لون أو قسم / Search"
+                  }
+                  className="h-12 w-full rounded-full border border-border bg-card ps-11 pe-11 text-[16px] text-ink outline-none placeholder:text-muted-foreground focus:border-primary"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    onClick={() => setQuery("")}
+                    aria-label="مسح البحث"
+                    className="absolute top-1/2 left-2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </label>
+              {activeCategory && !results && categoryLetters.length > 1 && (
+                <LetterPicker letters={categoryLetters} onPick={jumpToLetter} />
               )}
-            </label>
+            </div>
 
             {activeCategory && !results && (
               <div className="scrollbar-none -mx-4 mt-3 flex items-center gap-2 overflow-x-auto px-4">
@@ -562,41 +620,41 @@ function Home() {
               role="status"
               className="animate-fade-in mx-auto mb-5 w-fit rounded-xl border border-primary/30 bg-accent px-5 py-3 text-center font-medium text-accent-foreground"
             >
-              اختاري منتجًا أولاً
+              اختاروا منتجًا أولاً
             </p>
           )}
 
           {results ? (
             results.length > 0 ? (
-              <>
+              <PhotoGroup key="search">
                 <p className="text-sm text-muted-foreground">
                   {arCount(results.length, ["نتيجة واحدة", "نتيجتان", "نتائج", "نتيجة"])}
                 </p>
                 {renderProductGrid(results, true)}
-              </>
+              </PhotoGroup>
             ) : (
               <div className="py-12 text-center">
                 <p className="text-lg text-ink">لا توجد نتائج لـ «{query.trim()}»</p>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  جرّبي كلمة أخرى، أو اسم اللون، أو تصفحي الأقسام.
+                  جرّبوا كلمة أخرى، أو اسم اللون، أو تصفحوا الأقسام.
                 </p>
                 <button
                   type="button"
                   onClick={() => setQuery("")}
                   className="mt-5 rounded-full border border-primary px-6 py-2.5 text-sm font-bold text-primary"
                 >
-                  تصفّحي الأقسام
+                  تصفّحوا الأقسام
                 </button>
               </div>
             )
           ) : activeCategory ? (
-            <>
+            <PhotoGroup key={`cat:${activeCategory.name}`}>
               <h2 className="text-2xl text-ink">{activeCategory.name}</h2>
-              {renderProductGrid(activeCategory.items)}
-            </>
+              {renderProductGrid(categoryItems)}
+            </PhotoGroup>
           ) : (
-            <>
-              <h2 className="text-2xl text-ink">تسوّقي حسب القسم</h2>
+            <PhotoGroup key="categories">
+              <h2 className="text-2xl text-ink">تسوّقوا حسب القسم</h2>
               {categories.length === 0 ? (
                 <p className="py-12 text-center text-muted-foreground">لا توجد منتجات بعد</p>
               ) : (
@@ -609,14 +667,11 @@ function Home() {
                       className="group text-start"
                     >
                       <span className="block truncate text-base font-bold text-ink">{c.name}</span>
-                      <span className="mt-2 block aspect-square overflow-hidden rounded-2xl border border-border bg-muted">
+                      <span className="photo-slot mt-2 block aspect-square overflow-hidden rounded-2xl border border-border bg-muted">
                         {c.photo ? (
-                          <img
-                            src={c.photo}
-                            alt=""
-                            loading="lazy"
-                            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                          />
+                          <span className="block h-full w-full transition-transform duration-500 group-hover:scale-105">
+                            <Photo thumb src={c.photo} className="h-full w-full object-cover" />
+                          </span>
                         ) : (
                           <span className="flex h-full items-center justify-center text-5xl font-extrabold text-primary/35">
                             {c.name.slice(0, 1)}
@@ -630,17 +685,27 @@ function Home() {
                   ))}
                 </div>
               )}
-            </>
+            </PhotoGroup>
           )}
         </div>
       </section>
 
-      {/* story */}
-      <section className="border-t border-border bg-secondary px-5 py-16 text-center">
-        <p className="text-sm font-bold text-primary">{story.story_label}</p>
-        <h2 className="mt-3 text-3xl text-ink">{story.story_title}</h2>
-        <p className="mx-auto mt-4 max-w-xl leading-8 text-muted-foreground">{story.story_text}</p>
-      </section>
+      {/* story — every line is optional; with all three empty the section isn't there at all */}
+      {(story.story_label || story.story_title || story.story_text) && (
+        <section className="border-t border-border bg-secondary px-5 py-16 text-center">
+          <div className="space-y-3">
+            {story.story_label && (
+              <p className="text-sm font-bold text-primary">{story.story_label}</p>
+            )}
+            {story.story_title && <h2 className="text-3xl text-ink">{story.story_title}</h2>}
+            {story.story_text && (
+              <p className="mx-auto max-w-xl pt-1 leading-8 text-muted-foreground">
+                {story.story_text}
+              </p>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* contact */}
       <footer className="bg-ink px-5 pt-14 pb-10 text-center text-white">
@@ -664,18 +729,18 @@ function Home() {
             <path d="M3.5 20.5 4.8 16A8.5 8.5 0 1 1 8 19.3Z" />
             <path d="M9.2 8.3c.3-.5.8-.5 1.1 0l.8 1.4c.2.3.1.7-.1 1l-.5.5c.5 1.1 1.4 2 2.5 2.5l.5-.5c.3-.2.7-.3 1-.1l1.4.8c.5.3.5.8 0 1.1-1 .9-2.4.9-3.6.2a9 9 0 0 1-3.3-3.3c-.7-1.2-.7-2.6.2-3.4Z" />
           </svg>
-          <span dir="ltr">0918640785</span>
+          <span dir="ltr">0935533599</span>
         </a>
-        <p className="mt-4 text-white/75">ليبيا، طرابلس - توصيل جميع أنحاء ليبيا</p>
+        <p className="mt-4 text-white/75">توصيل لجميع أنحاء ليبيا</p>
         <SocialLinks className="mt-6" />
         <button
           type="button"
           onClick={handleBookingRequest}
           className="mt-9 h-12 rounded-full bg-white px-9 font-extrabold text-primary"
         >
-          اطلبي الآن
+          اطلبوا الآن
         </button>
-        <p className="mt-10 text-xs text-white/50">© Glamour with Jannat</p>
+        <p className="mt-10 text-xs text-white/50">© الرابحي للمفروشات</p>
       </footer>
 
       {/* cart drawer */}
@@ -712,9 +777,9 @@ function Home() {
                     return (
                       <div key={l.key} className="flex items-center gap-3">
                         {l.image_url && (
-                          <img
+                          <Photo
+                            thumb
                             src={l.image_url}
-                            alt=""
                             className="h-14 w-14 shrink-0 rounded-2xl object-cover"
                           />
                         )}
@@ -784,7 +849,7 @@ function Home() {
                 </div>
                 {cartBlocked && (
                   <p className="mt-4 text-center text-sm text-destructive">
-                    عدّلي الأصناف المحددة باللون الأحمر لإكمال الطلب
+                    عدّلوا الأصناف المحددة باللون الأحمر لإكمال الطلب
                   </p>
                 )}
                 <button
