@@ -226,7 +226,7 @@ export function ProductSheet({
             <>
               <img src={preview} alt="" className="aspect-[3/4] w-full object-cover" />
               <p className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto w-fit rounded-full bg-ink/70 px-4 py-1.5 text-xs text-white">
-                اضغطي في أي مكان للعودة لصور المنتج
+                اضغطوا في أي مكان للعودة لصور المنتج
               </p>
             </>
           ) : gallery.length > 0 ? (
@@ -339,7 +339,7 @@ export function ProductSheet({
                   })}
                 </div>
                 {isMissing && (
-                  <p className="mt-2 text-sm text-destructive">اختاري {v.name} أولاً</p>
+                  <p className="mt-2 text-sm text-destructive">اختاروا {v.name} أولاً</p>
                 )}
               </fieldset>
             );
@@ -387,7 +387,7 @@ export function ProductSheet({
                         if (codeState !== "checking") setCodeState("idle");
                       }}
                       onKeyDown={(e) => e.key === "Enter" && applyCode()}
-                      placeholder="اكتبي الكود"
+                      placeholder="اكتبوا الكود"
                       autoCapitalize="characters"
                       className={`h-11 w-full min-w-0 rounded-full border bg-background px-4 text-[16px] outline-none focus:border-primary ${
                         codeState === "invalid" || codeState === "expired"
@@ -446,7 +446,7 @@ export function ProductSheet({
                 }`}
                 style={{ backgroundImage: "var(--gradient-pink)" }}
               >
-                <span>أضيفي للسلة</span>
+                <span>أضيفوا للسلة</span>
                 {settled && (
                   <span>
                     {formatPrice(unitPrice * qty)} <span className="text-xs">د.ل</span>
@@ -466,7 +466,7 @@ export function ProductSheet({
           )}
           {!soldOut && choiceShort && (
             <p className="mt-3 text-center text-xs leading-5 text-accent-foreground">
-              المتوفر من هذا الاختيار {choiceLeft} فقط — أكملي الحد الأدنى ({item.min_qty}) باختيار
+              المتوفر من هذا الاختيار {choiceLeft} فقط — أكملوا الحد الأدنى ({item.min_qty}) باختيار
               آخر
             </p>
           )}
