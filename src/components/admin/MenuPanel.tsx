@@ -20,6 +20,8 @@ import {
 } from "@/lib/shop.functions";
 import { SQUARE_CROP, withUploadRetry } from "@/lib/image";
 import { parseStock } from "@/lib/stock";
+import { parseValuePrice } from "@/lib/pricing";
+import { formatPrice } from "@/components/ProductSheet";
 import { useCloseLayer, withLayer } from "@/lib/back-layer";
 import { buildSearchIndex, searchProducts } from "@/lib/search";
 import { letterOf, sortByName } from "@/lib/sort";
@@ -241,7 +243,7 @@ export function MenuPanel({ phone }: { phone: string }) {
             image_ratio: draft.image_ratio,
             extra_images: draft.extra_images,
             extra_image_ratios: draft.extra_image_ratios,
-            category: draft.category || "مفروشات",
+            category: draft.category || "مكياج",
             sort_order: Number(draft.sort_order) || 0,
             stock: draft.stock.trim() === "" ? null : Math.max(0, Math.floor(Number(draft.stock))),
             variables: draft.variables.map((v) => ({
@@ -252,6 +254,8 @@ export function MenuPanel({ phone }: { phone: string }) {
                   label: x.label,
                   image_url: x.image_url,
                   stock: parseStock(x.stock),
+                  // checked by the form before saving; empty = the product's price
+                  price: parseValuePrice(x.price) ?? null,
                 })),
             })),
             min_qty: Math.max(1, Math.floor(Number(draft.min_qty) || 1)),
@@ -395,6 +399,7 @@ export function MenuPanel({ phone }: { phone: string }) {
                   <span className={x.stock === 0 ? "text-destructive line-through" : ""}>
                     {x.label}
                   </span>
+                  {x.price !== null ? ` ${formatPrice(x.price)} د.ل` : ""}
                   {x.stock === 0 ? " (نفذ)" : x.stock !== null ? ` (${x.stock})` : ""}
                 </span>
               ))}

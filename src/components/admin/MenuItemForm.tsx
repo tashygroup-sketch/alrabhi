@@ -7,6 +7,7 @@ import {
   variableTotal,
   type StockVariable,
 } from "@/lib/stock";
+import { parseValuePrice } from "@/lib/pricing";
 import { CropDialog, type CroppedImage } from "./CropDialog";
 import { CategorySelect } from "./CategorySelect";
 
@@ -44,14 +45,27 @@ function toLocalInput(iso: string | null | undefined) {
 
 // `uid` only lives in the form (stable React keys, and a photo that finishes uploading lands
 // on the right value even if values were added or removed meanwhile). Not saved.
-export type ValueDraft = { uid: string; label: string; image_url: string | null; stock: string };
+// `price` "" = the product's price; a number = this value's own price (replaces it when chosen).
+export type ValueDraft = {
+  uid: string;
+  label: string;
+  image_url: string | null;
+  stock: string;
+  price: string;
+};
 export type VariableDraft = { uid: string; name: string; values: ValueDraft[] };
 
-type CropTarget = "photo" | { value: string };
+type CropTarget = "main" | "extra" | { value: string };
 
 let uidCounter = 0;
 const newUid = () => `u${++uidCounter}`;
-const emptyValue = (): ValueDraft => ({ uid: newUid(), label: "", image_url: null, stock: "" });
+const emptyValue = (): ValueDraft => ({
+  uid: newUid(),
+  label: "",
+  image_url: null,
+  stock: "",
+  price: "",
+});
 
 // Form rows → what the stock rules in src/lib/stock.ts read (empty rows ignored).
 export function draftToStockVariables(variables: VariableDraft[]): StockVariable[] {
@@ -94,6 +108,7 @@ function toDraftVariables(variables: ProductVariant[] | undefined): VariableDraf
       label: x.label,
       image_url: x.image_url,
       stock: x.stock === null || x.stock === undefined ? "" : String(x.stock),
+      price: x.price === null || x.price === undefined ? "" : String(x.price),
     })),
   }));
 }
@@ -111,8 +126,21 @@ function checkVariables(variables: VariableDraft[]): string | null {
     names.add(name);
     const dup = labels.find((l, i) => labels.indexOf(l) !== i);
     if (dup) return `القيمة "${dup}" مكررة في "${name}"`;
+    const badPrice = v.values.find((x) => x.label.trim() && parseValuePrice(x.price) === undefined);
+    if (badPrice) return `سعر "${badPrice.label.trim()}" غير صحيح`;
   }
   return null;
+}
+
+// A price as it's typed: Arabic digits → 0-9, "٫" or "," → ".", one dot at most, nothing else.
+function toDecimal(raw: string) {
+  const text = raw
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u066b,]/g, ".")
+    .replace(/[^0-9.]/g, "");
+  const dot = text.indexOf(".");
+  return dot === -1 ? text : text.slice(0, dot + 1) + text.slice(dot + 1).replace(/\./g, "");
 }
 
 // Phone keyboards set to Arabic type ٠١٢٣٤٥٦٧٨٩ (or ۰۱۲...); convert them to 0-9 and drop
@@ -181,15 +209,10 @@ export function MenuItemForm({
   // Our own copy of the options, so a category created here shows as selected immediately.
   const [availableCategories, setAvailableCategories] = useState(categories);
   const [uploadingMain, setUploadingMain] = useState(false);
+  // true while a main photo is on its way (read inside uploads that finish later)
+  const mainOnItsWay = useRef(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  // Photos waiting to be cropped, one after another (several can be picked at once).
-  const [cropQueue, setCropQueue] = useState<{ file: File; target: CropTarget }[]>([]);
-  const pendingCrop = cropQueue[0] ?? null;
-  // True once the product has a cover photo (or one is on its way). The first photo picked
-  // becomes the cover, whichever "add photo" button was used; the rest are extra photos.
-  const coverTaken = useRef(Boolean(initial?.image_url));
-  // Uploads run one after another so the photos keep the order they were picked in.
-  const uploadChain = useRef<Promise<void>>(Promise.resolve());
+  const [pendingCrop, setPendingCrop] = useState<{ file: File; target: CropTarget } | null>(null);
 
   // The display order is no longer a field: keep an item's place if it stays in its original
   // category, otherwise put it at the end of the category it's moved into.
@@ -222,79 +245,61 @@ export function MenuItemForm({
 
   function pickFile(target: CropTarget) {
     return (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files ?? []);
+      const file = e.target.files?.[0];
       e.target.value = "";
-      if (files.length === 0) return;
-      // A shade photo is always a single photo; product photos can be several.
-      const chosen = typeof target === "object" ? files.slice(0, 1) : files;
-      setCropQueue((q) => [...q, ...chosen.map((file) => ({ file, target }))]);
+      if (file) setPendingCrop({ file, target });
     };
   }
 
   // The crop screen closes right away; the upload carries on in the background, so the next
   // photo can be picked while this one is still uploading.
   function handleCropped(image: CroppedImage) {
-    const target = pendingCrop?.target ?? "photo";
-    setCropQueue((q) => q.slice(1));
+    const target = pendingCrop?.target ?? "main";
+    setPendingCrop(null);
     setUploadError(null);
     if (typeof target === "object") void uploadValueImage(target.value, image);
-    else if (!coverTaken.current) {
-      coverTaken.current = true;
-      void uploadMain(image);
-    } else void uploadExtra(image);
+    else if (target === "main") void uploadMain(image);
+    else void uploadExtra(image);
   }
 
   function failed(err: unknown) {
     setUploadError(err instanceof Error ? err.message : "تعذّر رفع الصورة");
   }
 
-  function uploadMain(image: CroppedImage) {
+  async function uploadMain(image: CroppedImage) {
     setUploadingMain(true);
-    uploadChain.current = uploadChain.current.then(async () => {
-      try {
-        const { url, ratio } = await onUploadImage(image);
-        setDraft((d) => ({ ...d, image_url: url, image_ratio: ratio }));
-      } catch (err) {
-        coverTaken.current = false;
-        failed(err);
-      } finally {
-        setUploadingMain(false);
-      }
-    });
+    mainOnItsWay.current = true;
+    try {
+      const { url, ratio } = await onUploadImage(image);
+      setDraft((d) => ({ ...d, image_url: url, image_ratio: ratio }));
+    } catch (err) {
+      failed(err);
+    } finally {
+      mainOnItsWay.current = false;
+      setUploadingMain(false);
+    }
   }
 
-  function uploadExtra(image: CroppedImage) {
+  async function uploadExtra(image: CroppedImage) {
     setPendingExtras((n) => n + 1);
-    uploadChain.current = uploadChain.current.then(async () => {
-      try {
-        const { url, ratio } = await onUploadImage(image);
-        setDraft((d) => ({
-          ...d,
-          extra_images: [...d.extra_images, url],
-          extra_image_ratios: [...d.extra_image_ratios, ratio ?? 4 / 3],
-        }));
-      } catch (err) {
-        failed(err);
-      } finally {
-        setPendingExtras((n) => n - 1);
-      }
-    });
-  }
-
-  // Removing the cover promotes the first extra photo to be the new cover.
-  function removeMainImage() {
-    coverTaken.current = draft.extra_images.length > 0;
-    setDraft((d) => {
-      const [next, ...rest] = d.extra_images;
-      const [nextRatio, ...restRatios] = d.extra_image_ratios;
-      return {
-        ...d,
-        image_url: next ?? "",
-        image_ratio: next ? (nextRatio ?? null) : null,
-        extra_images: rest,
-        extra_image_ratios: restRatios,
-      };
-    });
+    try {
+      const { url, ratio } = await onUploadImage(image);
+      setDraft((d) =>
+        // No main photo yet: the first photo added with «+ صورة» becomes the main one —
+        // it's the one shown on the product's card, so the card is never left empty.
+        !d.image_url && !mainOnItsWay.current
+          ? { ...d, image_url: url, image_ratio: ratio }
+          : {
+              ...d,
+              extra_images: [...d.extra_images, url],
+              extra_image_ratios: [...d.extra_image_ratios, ratio ?? 4 / 3],
+            },
+      );
+    } catch (err) {
+      failed(err);
+    } finally {
+      setPendingExtras((n) => n - 1);
+    }
   }
 
   async function uploadValueImage(valueUid: string, image: CroppedImage) {
@@ -600,7 +605,7 @@ export function MenuItemForm({
           <input
             dir="auto"
             value={draft.discount_code}
-            placeholder="مثال: RABHI10"
+            placeholder="مثال: JANNAT10"
             onChange={(e) => {
               setDiscountError(null);
               setDraft((d) => ({ ...d, discount_code: e.target.value }));
@@ -665,7 +670,9 @@ export function MenuItemForm({
         </div>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
           مثل اللون أو المقاس. إذا أضفتِ متغيرًا، يجب على الزبونة اختيار قيمة منه قبل الطلب. الكمية
-          لكل قيمة اختيارية: فارغة = غير محدودة، 0 = نفذت (تظهر رمادية للزبونة حتى تزيديها).
+          لكل قيمة اختيارية: فارغة = غير محدودة، 0 = نفذت (تظهر رمادية للزبونة حتى تزيديها). السعر
+          لكل قيمة اختياري: فارغ = سعر المنتج، وإذا كتبتِ سعرًا يصبح هو السعر عند اختيار هذه القيمة
+          (والخصم والكود يُطبقان عليه بنفس النسبة).
         </p>
 
         {draft.variables.map((v) => {
@@ -694,91 +701,119 @@ export function MenuItemForm({
                 </button>
               </div>
 
-              <div className="mt-2 flex items-center gap-2 px-0.5 text-[11px] text-muted-foreground">
-                <span className="w-12 shrink-0 text-center">الصورة</span>
-                <span className="min-w-0 flex-1">القيمة</span>
-                <span className="w-16 shrink-0 text-center">الكمية</span>
-                <span className="w-9 shrink-0" />
-              </div>
-              <div className="mt-1 space-y-2">
+              <div className="mt-2 space-y-3">
                 {v.values.map((val) => {
                   const busyHere = uploadingValues.includes(val.uid);
                   const soldOut = val.stock !== "" && Number(val.stock) === 0;
+                  const badPrice = parseValuePrice(val.price) === undefined;
                   return (
-                    <div key={val.uid} className="flex items-center gap-2">
-                      <div className="relative h-12 w-12 shrink-0">
-                        {/* The file input sits inside the tile (visually hidden, not display:none)
+                    <div key={val.uid} className="rounded-2xl bg-background/70 p-2">
+                      <div className="flex items-center gap-2">
+                        <div className="relative h-12 w-12 shrink-0">
+                          {/* The file input sits inside the tile (visually hidden, not display:none)
                             so tapping the tile opens the photo picker reliably on iPhone. */}
-                        <label
-                          className="relative flex h-12 w-12 cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-dashed border-primary/60 bg-background text-[10px] text-primary"
-                          title="صورة القيمة"
-                        >
-                          {val.image_url ? (
-                            <img
-                              src={val.image_url}
-                              alt=""
-                              className="h-full w-full object-cover"
+                          <label
+                            className="relative flex h-12 w-12 cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-dashed border-primary/60 bg-background text-[10px] text-primary"
+                            title="صورة القيمة"
+                          >
+                            {val.image_url ? (
+                              <img
+                                src={val.image_url}
+                                alt=""
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              !busyHere && "+ صورة"
+                            )}
+                            {busyHere && (
+                              <span className="absolute inset-0 flex items-center justify-center bg-background/80 text-xs text-primary">
+                                ...
+                              </span>
+                            )}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="sr-only"
+                              disabled={busyHere}
+                              onChange={pickFile({ value: val.uid })}
                             />
-                          ) : (
-                            !busyHere && "+ صورة"
+                          </label>
+                          {val.image_url && !busyHere && (
+                            <button
+                              type="button"
+                              onClick={() => updateValue(val.uid, { image_url: null })}
+                              aria-label="إزالة صورة القيمة"
+                              className="absolute -top-1.5 -left-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-ink/80 text-[10px] text-white"
+                            >
+                              ✕
+                            </button>
                           )}
-                          {busyHere && (
-                            <span className="absolute inset-0 flex items-center justify-center bg-background/80 text-xs text-primary">
-                              ...
-                            </span>
-                          )}
+                        </div>
+                        <input
+                          value={val.label}
+                          placeholder="مثال: أحمر"
+                          aria-label="القيمة"
+                          onChange={(e) => updateValue(val.uid, { label: e.target.value })}
+                          className="w-full min-w-0 rounded-xl border border-border bg-background px-3 py-2.5 text-base outline-none focus:border-primary"
+                        />
+                        <button
+                          type="button"
+                          aria-label="حذف القيمة"
+                          onClick={() =>
+                            setVariables((vars) =>
+                              vars.map((x) =>
+                                x.uid === v.uid
+                                  ? { ...x, values: x.values.filter((y) => y.uid !== val.uid) }
+                                  : x,
+                              ),
+                            )
+                          }
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-destructive"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <div className="mt-2 flex gap-2">
+                        {/* empty price = the product's price (shown faded as the hint) */}
+                        <label
+                          className={`flex min-w-0 flex-1 items-center gap-1 rounded-xl border bg-background ps-2.5 focus-within:border-primary ${
+                            badPrice ? "border-destructive" : "border-border"
+                          }`}
+                        >
+                          <span className="shrink-0 text-[11px] text-muted-foreground">السعر</span>
                           <input
-                            type="file"
-                            accept="image/*"
-                            className="sr-only"
-                            disabled={busyHere}
-                            onChange={pickFile({ value: val.uid })}
+                            inputMode="decimal"
+                            dir="ltr"
+                            value={val.price}
+                            placeholder={draft.price.trim() || "—"}
+                            aria-label={`سعر ${val.label || "القيمة"}`}
+                            onChange={(e) =>
+                              updateValue(val.uid, { price: toDecimal(e.target.value) })
+                            }
+                            className="w-full min-w-0 bg-transparent px-1 py-2 text-center text-base text-ink outline-none placeholder:text-muted-foreground/60"
                           />
                         </label>
-                        {val.image_url && !busyHere && (
-                          <button
-                            type="button"
-                            onClick={() => updateValue(val.uid, { image_url: null })}
-                            aria-label="إزالة صورة القيمة"
-                            className="absolute -top-1.5 -left-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-ink/80 text-[10px] text-white"
-                          >
-                            ✕
-                          </button>
-                        )}
+                        <label
+                          className={`flex min-w-0 flex-1 items-center gap-1 rounded-xl border bg-background ps-2.5 focus-within:border-primary ${
+                            soldOut ? "border-destructive" : "border-border"
+                          }`}
+                        >
+                          <span className="shrink-0 text-[11px] text-muted-foreground">الكمية</span>
+                          <input
+                            inputMode="numeric"
+                            dir="ltr"
+                            value={val.stock}
+                            placeholder="∞"
+                            aria-label={`كمية ${val.label || "القيمة"}`}
+                            onChange={(e) =>
+                              updateValue(val.uid, { stock: toDigits(e.target.value) })
+                            }
+                            className={`w-full min-w-0 bg-transparent px-1 py-2 text-center text-base outline-none placeholder:text-muted-foreground ${
+                              soldOut ? "text-destructive" : "text-ink"
+                            }`}
+                          />
+                        </label>
                       </div>
-                      <input
-                        value={val.label}
-                        placeholder="مثال: أحمر"
-                        onChange={(e) => updateValue(val.uid, { label: e.target.value })}
-                        className="w-full min-w-0 rounded-xl border border-border bg-background px-3 py-2.5 text-base outline-none focus:border-primary"
-                      />
-                      <input
-                        inputMode="numeric"
-                        dir="ltr"
-                        value={val.stock}
-                        placeholder="∞"
-                        aria-label={`كمية ${val.label || "القيمة"}`}
-                        onChange={(e) => updateValue(val.uid, { stock: toDigits(e.target.value) })}
-                        className={`w-16 shrink-0 rounded-xl border bg-background px-1 py-2.5 text-center text-base outline-none placeholder:text-muted-foreground focus:border-primary ${
-                          soldOut ? "border-destructive text-destructive" : "border-border text-ink"
-                        }`}
-                      />
-                      <button
-                        type="button"
-                        aria-label="حذف القيمة"
-                        onClick={() =>
-                          setVariables((vars) =>
-                            vars.map((x) =>
-                              x.uid === v.uid
-                                ? { ...x, values: x.values.filter((y) => y.uid !== val.uid) }
-                                : x,
-                            ),
-                          )
-                        }
-                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-destructive"
-                      >
-                        ✕
-                      </button>
                     </div>
                   );
                 })}
@@ -821,17 +856,9 @@ export function MenuItemForm({
                 alt=""
                 className="h-full w-full rounded-xl border-2 border-primary object-cover"
               />
-              <span className="pointer-events-none absolute right-1 bottom-1 rounded-md bg-primary px-1.5 py-0.5 text-[10px] font-bold text-primary-foreground">
-                الغلاف
+              <span className="absolute inset-x-0 bottom-0 rounded-b-xl bg-primary py-0.5 text-center text-[10px] font-bold text-primary-foreground">
+                الصورة الرئيسية
               </span>
-              <button
-                type="button"
-                onClick={removeMainImage}
-                className="absolute top-1 left-1 flex h-6 w-6 items-center justify-center rounded-full bg-ink/70 text-xs text-white"
-                aria-label="إزالة صورة الغلاف"
-              >
-                ✕
-              </button>
             </div>
           ) : (
             <div className="flex h-24 w-[72px] shrink-0 items-center justify-center rounded-xl border-2 border-primary/40 bg-muted text-center text-[11px] text-muted-foreground">
@@ -861,31 +888,26 @@ export function MenuItemForm({
           ))}
           <label className="relative flex h-24 w-[72px] shrink-0 cursor-pointer items-center justify-center rounded-xl border border-dashed border-primary/60 text-xs text-primary">
             + صورة
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              className="sr-only"
-              onChange={pickFile("photo")}
-            />
+            <input type="file" accept="image/*" className="sr-only" onChange={pickFile("extra")} />
           </label>
         </div>
 
         <label className="relative mt-3 inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-primary">
           <span className="rounded-full border border-primary px-3 py-1.5">
-            {uploadingMain ? "جارِ الرفع..." : "📷 اختيار صور من المعرض"}
+            {uploadingMain
+              ? "جارِ الرفع..."
+              : draft.image_url
+                ? "📷 تغيير الصورة الرئيسية"
+                : "📷 اختيار الصورة الرئيسية"}
           </span>
           <input
             type="file"
             accept="image/*"
-            multiple
             className="sr-only"
-            onChange={pickFile("photo")}
+            onChange={pickFile("main")}
+            disabled={uploadingMain}
           />
         </label>
-        <p className="mt-1 text-xs text-muted-foreground">
-          يمكنك اختيار عدة صور، وأول صورة تصبح صورة الغلاف.
-        </p>
         {uploadError && <p className="mt-1 text-sm text-destructive">{uploadError}</p>}
       </div>
 
@@ -909,7 +931,7 @@ export function MenuItemForm({
 
       <CropDialog
         file={pendingCrop?.file ?? null}
-        onCancel={() => setCropQueue([])}
+        onCancel={() => setPendingCrop(null)}
         onDone={handleCropped}
       />
     </form>
