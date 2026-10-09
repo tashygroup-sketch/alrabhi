@@ -55,7 +55,7 @@ export type ValueDraft = {
 };
 export type VariableDraft = { uid: string; name: string; values: ValueDraft[] };
 
-type CropTarget = "main" | "extra" | { value: string };
+type CropTarget = "photo" | { value: string };
 
 let uidCounter = 0;
 const newUid = () => `u${++uidCounter}`;
@@ -209,10 +209,15 @@ export function MenuItemForm({
   // Our own copy of the options, so a category created here shows as selected immediately.
   const [availableCategories, setAvailableCategories] = useState(categories);
   const [uploadingMain, setUploadingMain] = useState(false);
-  // true while a main photo is on its way (read inside uploads that finish later)
-  const mainOnItsWay = useRef(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [pendingCrop, setPendingCrop] = useState<{ file: File; target: CropTarget } | null>(null);
+  // Photos waiting to be cropped, one after another (several can be picked at once).
+  const [cropQueue, setCropQueue] = useState<{ file: File; target: CropTarget }[]>([]);
+  const pendingCrop = cropQueue[0] ?? null;
+  // True once the product has a cover photo (or one is on its way). The first photo picked
+  // becomes the cover, whichever "add photo" button was used; the rest are extra photos.
+  const coverTaken = useRef(Boolean(initial?.image_url));
+  // Uploads run one after another so the photos keep the order they were picked in.
+  const uploadChain = useRef<Promise<void>>(Promise.resolve());
 
   // The display order is no longer a field: keep an item's place if it stays in its original
   // category, otherwise put it at the end of the category it's moved into.
@@ -245,61 +250,79 @@ export function MenuItemForm({
 
   function pickFile(target: CropTarget) {
     return (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
+      const files = Array.from(e.target.files ?? []);
       e.target.value = "";
-      if (file) setPendingCrop({ file, target });
+      if (files.length === 0) return;
+      // A shade photo is always a single photo; product photos can be several.
+      const chosen = typeof target === "object" ? files.slice(0, 1) : files;
+      setCropQueue((q) => [...q, ...chosen.map((file) => ({ file, target }))]);
     };
   }
 
   // The crop screen closes right away; the upload carries on in the background, so the next
   // photo can be picked while this one is still uploading.
   function handleCropped(image: CroppedImage) {
-    const target = pendingCrop?.target ?? "main";
-    setPendingCrop(null);
+    const target = pendingCrop?.target ?? "photo";
+    setCropQueue((q) => q.slice(1));
     setUploadError(null);
     if (typeof target === "object") void uploadValueImage(target.value, image);
-    else if (target === "main") void uploadMain(image);
-    else void uploadExtra(image);
+    else if (!coverTaken.current) {
+      coverTaken.current = true;
+      void uploadMain(image);
+    } else void uploadExtra(image);
   }
 
   function failed(err: unknown) {
     setUploadError(err instanceof Error ? err.message : "تعذّر رفع الصورة");
   }
 
-  async function uploadMain(image: CroppedImage) {
+  function uploadMain(image: CroppedImage) {
     setUploadingMain(true);
-    mainOnItsWay.current = true;
-    try {
-      const { url, ratio } = await onUploadImage(image);
-      setDraft((d) => ({ ...d, image_url: url, image_ratio: ratio }));
-    } catch (err) {
-      failed(err);
-    } finally {
-      mainOnItsWay.current = false;
-      setUploadingMain(false);
-    }
+    uploadChain.current = uploadChain.current.then(async () => {
+      try {
+        const { url, ratio } = await onUploadImage(image);
+        setDraft((d) => ({ ...d, image_url: url, image_ratio: ratio }));
+      } catch (err) {
+        coverTaken.current = false;
+        failed(err);
+      } finally {
+        setUploadingMain(false);
+      }
+    });
   }
 
-  async function uploadExtra(image: CroppedImage) {
+  function uploadExtra(image: CroppedImage) {
     setPendingExtras((n) => n + 1);
-    try {
-      const { url, ratio } = await onUploadImage(image);
-      setDraft((d) =>
-        // No main photo yet: the first photo added with «+ صورة» becomes the main one —
-        // it's the one shown on the product's card, so the card is never left empty.
-        !d.image_url && !mainOnItsWay.current
-          ? { ...d, image_url: url, image_ratio: ratio }
-          : {
-              ...d,
-              extra_images: [...d.extra_images, url],
-              extra_image_ratios: [...d.extra_image_ratios, ratio ?? 4 / 3],
-            },
-      );
-    } catch (err) {
-      failed(err);
-    } finally {
-      setPendingExtras((n) => n - 1);
-    }
+    uploadChain.current = uploadChain.current.then(async () => {
+      try {
+        const { url, ratio } = await onUploadImage(image);
+        setDraft((d) => ({
+          ...d,
+          extra_images: [...d.extra_images, url],
+          extra_image_ratios: [...d.extra_image_ratios, ratio ?? 4 / 3],
+        }));
+      } catch (err) {
+        failed(err);
+      } finally {
+        setPendingExtras((n) => n - 1);
+      }
+    });
+  }
+
+  // Removing the cover promotes the first extra photo to be the new cover.
+  function removeMainImage() {
+    coverTaken.current = draft.extra_images.length > 0;
+    setDraft((d) => {
+      const [next, ...rest] = d.extra_images;
+      const [nextRatio, ...restRatios] = d.extra_image_ratios;
+      return {
+        ...d,
+        image_url: next ?? "",
+        image_ratio: next ? (nextRatio ?? null) : null,
+        extra_images: rest,
+        extra_image_ratios: restRatios,
+      };
+    });
   }
 
   async function uploadValueImage(valueUid: string, image: CroppedImage) {
@@ -605,7 +628,7 @@ export function MenuItemForm({
           <input
             dir="auto"
             value={draft.discount_code}
-            placeholder="مثال: JANNAT10"
+            placeholder="مثال: VENICE10"
             onChange={(e) => {
               setDiscountError(null);
               setDraft((d) => ({ ...d, discount_code: e.target.value }));
@@ -856,9 +879,17 @@ export function MenuItemForm({
                 alt=""
                 className="h-full w-full rounded-xl border-2 border-primary object-cover"
               />
-              <span className="absolute inset-x-0 bottom-0 rounded-b-xl bg-primary py-0.5 text-center text-[10px] font-bold text-primary-foreground">
-                الصورة الرئيسية
+              <span className="pointer-events-none absolute right-1 bottom-1 rounded-md bg-primary px-1.5 py-0.5 text-[10px] font-bold text-primary-foreground">
+                الغلاف
               </span>
+              <button
+                type="button"
+                onClick={removeMainImage}
+                className="absolute top-1 left-1 flex h-6 w-6 items-center justify-center rounded-full bg-ink/70 text-xs text-white"
+                aria-label="إزالة صورة الغلاف"
+              >
+                ✕
+              </button>
             </div>
           ) : (
             <div className="flex h-24 w-[72px] shrink-0 items-center justify-center rounded-xl border-2 border-primary/40 bg-muted text-center text-[11px] text-muted-foreground">
@@ -888,26 +919,31 @@ export function MenuItemForm({
           ))}
           <label className="relative flex h-24 w-[72px] shrink-0 cursor-pointer items-center justify-center rounded-xl border border-dashed border-primary/60 text-xs text-primary">
             + صورة
-            <input type="file" accept="image/*" className="sr-only" onChange={pickFile("extra")} />
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="sr-only"
+              onChange={pickFile("photo")}
+            />
           </label>
         </div>
 
         <label className="relative mt-3 inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-primary">
           <span className="rounded-full border border-primary px-3 py-1.5">
-            {uploadingMain
-              ? "جارِ الرفع..."
-              : draft.image_url
-                ? "📷 تغيير الصورة الرئيسية"
-                : "📷 اختيار الصورة الرئيسية"}
+            {uploadingMain ? "جارِ الرفع..." : "📷 اختيار صور من المعرض"}
           </span>
           <input
             type="file"
             accept="image/*"
+            multiple
             className="sr-only"
-            onChange={pickFile("main")}
-            disabled={uploadingMain}
+            onChange={pickFile("photo")}
           />
         </label>
+        <p className="mt-1 text-xs text-muted-foreground">
+          يمكنك اختيار عدة صور، وأول صورة تصبح صورة الغلاف.
+        </p>
         {uploadError && <p className="mt-1 text-sm text-destructive">{uploadError}</p>}
       </div>
 
@@ -931,7 +967,7 @@ export function MenuItemForm({
 
       <CropDialog
         file={pendingCrop?.file ?? null}
-        onCancel={() => setPendingCrop(null)}
+        onCancel={() => setCropQueue([])}
         onDone={handleCropped}
       />
     </form>
