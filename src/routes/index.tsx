@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Check, MapPin, Plus, Search, ShoppingBag, X } from "lucide-react";
+import { ArrowRight, Check, Plus, Search, ShoppingBag, X } from "lucide-react";
 import {
   coverImage,
   getCategories,
@@ -46,14 +46,6 @@ const categoriesQuery = queryOptions({
 //   ?panel=cart|order the cart / the order form
 type HomeSearch = { cat?: string; p?: string; panel?: "cart" | "order" };
 
-// The shop's address and location, at the bottom of the page. The small map is a picture of
-// the spot (the "AlRabhy Company" pin on شارع الجود, الفويهات); tapping it opens the shop's own
-// Google Maps link.
-const STORE_ADDRESS = "ليبيا - بنغازي شارع الجود، شارع عشرين";
-const STORE_MAP_URL = "https://maps.app.goo.gl/ACCgNhvSPBZZY6Wz9";
-const STORE_MAP_EMBED =
-  "https://maps.google.com/maps?q=32.0759405,20.078318&z=16&hl=ar&output=embed";
-
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>): HomeSearch => {
     const str = (k: string) =>
@@ -72,16 +64,16 @@ export const Route = createFileRoute("/")({
     ]),
   head: () => ({
     meta: [
-      { title: "الرابحي للمفروشات | مفروشات لبيت مريح وأنيق" },
+      { title: "Glamour with Jannat | مكياج وعناية بالبشرة" },
       {
         name: "description",
         content:
-          "الرابحي للمفروشات — مفروشات مختارة بعناية. توصيل لجميع أنحاء ليبيا، اطلبوا عبر واتساب.",
+          "Glamour with Jannat — مكياج، عناية بالبشرة، عطور وعناية بالشعر. توصيل لجميع أنحاء ليبيا، اطلبي عبر واتساب.",
       },
-      { property: "og:title", content: "الرابحي للمفروشات" },
+      { property: "og:title", content: "Glamour with Jannat" },
       {
         property: "og:description",
-        content: "راحة بيتك تبدأ من هنا — تسوّقوا الآن من الرابحي للمفروشات.",
+        content: "جمالك يستحق الأفضل — تسوّقي الآن من Glamour with Jannat.",
       },
     ],
   }),
@@ -108,6 +100,7 @@ function Home() {
   const cartOpen = panel === "cart";
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [limitHit, setLimitHit] = useState<string | null>(null);
+  const [menuPrompt, setMenuPrompt] = useState(false);
   const [query, setQuery] = useState("");
   // the product the customer just jumped to with the letter list (outlined for a moment)
   const [jumpedTo, setJumpedTo] = useState<string | null>(null);
@@ -250,14 +243,14 @@ function Home() {
       const chosen = l.options?.find((o) => o.name === v.name);
       return !chosen || !v.values.some((x) => x.label === chosen.value);
     });
-    if (optionsStale) return "تغيّرت خيارات هذا المنتج، احذفوه وأضيفوه من جديد";
+    if (optionsStale) return "تغيّرت خيارات هذا المنتج، احذفيه وأضيفيه من جديد";
     if (l.discount_code) {
       const d = product.discount;
       if (!d || (d.ends_at && new Date(d.ends_at).getTime() <= Date.now())) {
-        return "انتهى الخصم على هذا المنتج، احذفوه وأضيفوه من جديد";
+        return "انتهى الخصم على هذا المنتج، احذفيه وأضيفيه من جديد";
       }
     } else if (Math.abs(l.price - salePriceFor(product, l.options)) > 0.005) {
-      return "تغيّر سعر هذا المنتج، احذفوه وأضيفوه من جديد";
+      return "تغيّر سعر هذا المنتج، احذفيه وأضيفيه من جديد";
     }
     return null;
   }
@@ -340,6 +333,16 @@ function Home() {
     scrollToShop();
   }
 
+  function handleBookingRequest() {
+    if (lines.length > 0) {
+      setCartOpen(true);
+      return;
+    }
+    setMenuPrompt(true);
+    scrollToShop();
+    window.setTimeout(() => setMenuPrompt(false), 3500);
+  }
+
   useLockScroll(cartOpen);
 
   // A plain render function, not an inner component: an inner component would be a new type
@@ -398,7 +401,7 @@ function Home() {
                   <button
                     type="button"
                     onClick={() => handleQuickAdd(item)}
-                    aria-label={`أضيفوا ${item.name} للسلة`}
+                    aria-label={`أضيفي ${item.name} للسلة`}
                     className={`absolute bottom-2 left-2 flex h-10 min-w-10 items-center justify-center gap-1 rounded-full px-2.5 text-sm font-bold shadow-[0_6px_16px_-6px_rgba(0,0,0,0.45)] transition-colors ${
                       limitHit === item.id
                         ? "bg-card text-muted-foreground"
@@ -476,10 +479,11 @@ function Home() {
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <button
             type="button"
+            dir="ltr"
             onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-            className="font-logo text-[24px] leading-none font-extrabold text-primary"
+            className="font-logo text-[22px] leading-none font-black tracking-tight text-primary"
           >
-            الرابحي
+            GLAMOUR
           </button>
           <button
             type="button"
@@ -518,13 +522,13 @@ function Home() {
             {story.hero_title && (
               <p className="text-[15px] font-medium text-white/90">{story.hero_title}</p>
             )}
-            {/* set like the logo: heavy Kufic name, "للمفروشات" under it */}
-            <h1 className="mt-3">
-              <span className="font-logo block text-[clamp(3rem,17vw,5rem)] leading-[1.3] font-extrabold md:text-[7.5vw] lg:text-[6rem]">
-                الرابحي
+            {/* set like the logo: heavy GLAMOUR, signature "With Jannat" tucked under it */}
+            <h1 dir="ltr" className="mt-3 text-right">
+              <span className="font-logo block text-[clamp(2.6rem,15.5vw,4.25rem)] leading-[0.95] font-black tracking-tight whitespace-nowrap md:text-[6.5vw] lg:text-[5.25rem]">
+                GLAMOUR
               </span>
-              <span className="font-logo block text-[clamp(1.35rem,6.5vw,2rem)] leading-tight font-extrabold text-white/90">
-                للمفروشات
+              <span className="font-script -mt-1 block text-[clamp(2.25rem,11vw,3.25rem)] leading-none font-normal text-white/95 md:text-6xl">
+                With Jannat
               </span>
             </h1>
             {story.hero_subtitle && (
@@ -537,7 +541,7 @@ function Home() {
               onClick={() => showCategory()}
               className="mt-8 h-14 rounded-full bg-white px-9 text-base font-extrabold text-primary shadow-[0_14px_30px_-14px_rgba(0,0,0,0.45)] transition-transform hover:scale-[1.02]"
             >
-              تصفّحوا المنتجات
+              تصفّحي المنتجات
             </button>
           </div>
 
@@ -551,7 +555,12 @@ function Home() {
                 />
               </div>
               <div className="flex items-center justify-between px-3 pb-1">
-                <span className="font-logo text-sm font-extrabold text-primary">الرابحي</span>
+                <span
+                  dir="ltr"
+                  className="font-logo text-xs font-black tracking-tight text-primary"
+                >
+                  GLAMOUR
+                </span>
                 <span className="text-xs text-muted-foreground">عروضنا</span>
               </div>
             </div>
@@ -567,7 +576,7 @@ function Home() {
                 can be picked from anywhere in a long category without scrolling back up. */}
             <div className="flex items-center gap-2">
               <label className="relative block min-w-0 flex-1">
-                <span className="sr-only">ابحثوا عن منتج</span>
+                <span className="sr-only">ابحثي عن منتج</span>
                 <Search className="pointer-events-none absolute top-1/2 right-4 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
                 <input
                   type="search"
@@ -576,7 +585,7 @@ function Home() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={
-                    showLetters ? "ابحثوا عن منتج / Search" : "ابحثوا عن منتج، لون أو قسم / Search"
+                    showLetters ? "ابحثي عن منتج / Search" : "ابحثي عن منتج، لون أو قسم / Search"
                   }
                   className="h-12 w-full rounded-full border border-border bg-card ps-11 pe-11 text-[16px] text-ink outline-none placeholder:text-muted-foreground focus:border-primary"
                 />
@@ -625,6 +634,15 @@ function Home() {
         </div>
 
         <div className="mx-auto min-h-[60vh] max-w-5xl px-4 pt-6 pb-16">
+          {menuPrompt && (
+            <p
+              role="status"
+              className="animate-fade-in mx-auto mb-5 w-fit rounded-xl border border-primary/30 bg-accent px-5 py-3 text-center font-medium text-accent-foreground"
+            >
+              اختاري منتجًا أولاً
+            </p>
+          )}
+
           {results ? (
             results.length > 0 ? (
               <PhotoGroup key="search">
@@ -637,14 +655,14 @@ function Home() {
               <div className="py-12 text-center">
                 <p className="text-lg text-ink">لا توجد نتائج لـ «{query.trim()}»</p>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  جرّبوا كلمة أخرى، أو اسم اللون، أو تصفحوا الأقسام.
+                  جرّبي كلمة أخرى، أو اسم اللون، أو تصفحي الأقسام.
                 </p>
                 <button
                   type="button"
                   onClick={() => setQuery("")}
                   className="mt-5 rounded-full border border-primary px-6 py-2.5 text-sm font-bold text-primary"
                 >
-                  تصفّحوا الأقسام
+                  تصفّحي الأقسام
                 </button>
               </div>
             )
@@ -655,7 +673,7 @@ function Home() {
             </PhotoGroup>
           ) : (
             <PhotoGroup key="categories">
-              <h2 className="text-2xl text-ink">تسوّقوا حسب القسم</h2>
+              <h2 className="text-2xl text-ink">تسوّقي حسب القسم</h2>
               {categories.length === 0 ? (
                 <p className="py-12 text-center text-muted-foreground">لا توجد منتجات بعد</p>
               ) : (
@@ -730,37 +748,18 @@ function Home() {
             <path d="M3.5 20.5 4.8 16A8.5 8.5 0 1 1 8 19.3Z" />
             <path d="M9.2 8.3c.3-.5.8-.5 1.1 0l.8 1.4c.2.3.1.7-.1 1l-.5.5c.5 1.1 1.4 2 2.5 2.5l.5-.5c.3-.2.7-.3 1-.1l1.4.8c.5.3.5.8 0 1.1-1 .9-2.4.9-3.6.2a9 9 0 0 1-3.3-3.3c-.7-1.2-.7-2.6.2-3.4Z" />
           </svg>
-          <span dir="ltr">0935533599</span>
+          <span dir="ltr">0918640785</span>
         </a>
-        <p className="mt-4 text-white/75">{STORE_ADDRESS}</p>
+        <p className="mt-4 text-white/75">ليبيا، طرابلس - توصيل جميع أنحاء ليبيا</p>
         <SocialLinks className="mt-6" />
-        {/* the shop's location: a small map shaped like a button; tapping it opens Google Maps */}
-        <a
-          href={STORE_MAP_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`موقعنا على الخريطة: ${STORE_ADDRESS}`}
-          className="mx-auto mt-9 block w-full max-w-sm overflow-hidden rounded-3xl bg-white text-primary shadow-[0_12px_30px_-12px_rgba(0,0,0,0.7)] transition-transform active:scale-[0.98]"
+        <button
+          type="button"
+          onClick={handleBookingRequest}
+          className="mt-9 h-12 rounded-full bg-white px-9 font-extrabold text-primary"
         >
-          <span className="relative block h-44 w-full bg-muted">
-            {/* only a picture of the map: the page scrolls past it and a tap opens the link */}
-            <iframe
-              src={STORE_MAP_EMBED}
-              title="موقع الرابحي للمفروشات على الخريطة"
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-              tabIndex={-1}
-              aria-hidden
-              className="pointer-events-none absolute inset-0 h-full w-full border-0"
-            />
-            <span className="absolute inset-0" />
-          </span>
-          <span className="flex items-center justify-center gap-2 px-5 py-3.5 font-extrabold">
-            <MapPin className="h-5 w-5 shrink-0" aria-hidden />
-            موقعنا على الخريطة
-          </span>
-        </a>
-        <p className="mt-10 text-xs text-white/50">© الرابحي للمفروشات</p>
+          اطلبي الآن
+        </button>
+        <p className="mt-10 text-xs text-white/50">© Glamour with Jannat</p>
       </footer>
 
       {/* cart drawer */}
@@ -869,7 +868,7 @@ function Home() {
                 </div>
                 {cartBlocked && (
                   <p className="mt-4 text-center text-sm text-destructive">
-                    عدّلوا الأصناف المحددة باللون الأحمر لإكمال الطلب
+                    عدّلي الأصناف المحددة باللون الأحمر لإكمال الطلب
                   </p>
                 )}
                 <button
