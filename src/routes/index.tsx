@@ -40,9 +40,13 @@ const categoriesQuery = queryOptions({
 //   ?panel=cart|order the cart / the order form
 type HomeSearch = { cat?: string; p?: string; panel?: "cart" | "order" };
 
-// The shop's address, shown at the bottom of the page; tapping it opens the location in Maps.
+// The shop's address and location, at the bottom of the page. The small map is a picture of
+// the spot (the "AlRabhy Company" pin on شارع الجود, الفويهات); tapping it opens the shop's own
+// Google Maps link.
 const STORE_ADDRESS = "ليبيا - بنغازي شارع الجود، شارع عشرين";
 const STORE_MAP_URL = "https://maps.app.goo.gl/ACCgNhvSPBZZY6Wz9";
+const STORE_MAP_EMBED =
+  "https://maps.google.com/maps?q=32.0759405,20.078318&z=16&hl=ar&output=embed";
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>): HomeSearch => {
@@ -715,17 +719,33 @@ function Home() {
           </svg>
           <span dir="ltr">0935533599</span>
         </a>
-        <p className="mt-4 text-white/75">توصيل لجميع أنحاء ليبيا</p>
+        <p className="mt-4 text-white/75">{STORE_ADDRESS}</p>
         <SocialLinks className="mt-6" />
-        {/* the shop's location: opens Google Maps */}
+        {/* the shop's location: a small map shaped like a button; tapping it opens Google Maps */}
         <a
           href={STORE_MAP_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-9 inline-flex max-w-full items-center gap-2 rounded-3xl bg-white px-7 py-3 leading-6 font-extrabold text-primary"
+          aria-label={`موقعنا على الخريطة: ${STORE_ADDRESS}`}
+          className="mx-auto mt-9 block w-full max-w-sm overflow-hidden rounded-3xl bg-white text-primary shadow-[0_12px_30px_-12px_rgba(0,0,0,0.7)] transition-transform active:scale-[0.98]"
         >
-          <MapPin className="h-5 w-5 shrink-0" aria-hidden />
-          <span>{STORE_ADDRESS}</span>
+          <span className="relative block h-44 w-full bg-muted">
+            {/* only a picture of the map: the page scrolls past it and a tap opens the link */}
+            <iframe
+              src={STORE_MAP_EMBED}
+              title="موقع الرابحي للمفروشات على الخريطة"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+              tabIndex={-1}
+              aria-hidden
+              className="pointer-events-none absolute inset-0 h-full w-full border-0"
+            />
+            <span className="absolute inset-0" />
+          </span>
+          <span className="flex items-center justify-center gap-2 px-5 py-3.5 font-extrabold">
+            <MapPin className="h-5 w-5 shrink-0" aria-hidden />
+            موقعنا على الخريطة
+          </span>
         </a>
         <p className="mt-10 text-xs text-white/50">© الرابحي للمفروشات</p>
       </footer>
