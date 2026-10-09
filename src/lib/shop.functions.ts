@@ -6,7 +6,7 @@ import { hasValueStock, overStockValue, parseStock, totalFromValues } from "@/li
 import { LIBYAN_MOBILE, normalizeLibyanPhone } from "@/lib/phone";
 import { codePriceFor, parseValuePrice, salePriceFor } from "@/lib/pricing";
 
-export const WHATSAPP_NUMBER = "218918640785";
+export const WHATSAPP_NUMBER = "218923088051";
 
 // A product's own options, e.g. { name: "اللون", values: [{ label: "أحمر", image_url, stock, price }] }.
 // When a product has any, the customer must pick one value from each before ordering.
@@ -262,9 +262,26 @@ export const ORDER_STATUSES = ["جديد", "قيد التحضير", "جاهز ل
 export const DELIVERED = "تم التسليم";
 const NEW_ORDER = "جديد";
 
+// A value pasted into Cloudflare can carry quotes copied from .env, spaces or a line break;
+// any of these makes Supabase answer "Invalid API key". Strip them.
+function cleanEnv(value: string | undefined): string | undefined {
+  const v = value
+    ?.trim()
+    .replace(/^["']|["']$/g, "")
+    .trim();
+  return v || undefined;
+}
+
+// The storefront's read-only client. Uses the public URL and key baked in at build time from
+// .env first (they ship to every browser anyway), and Cloudflare's runtime values only as a
+// fallback, so a mistyped or wiped Cloudflare variable can't take the shop down.
 function publicClient() {
-  const key = process.env["SUPABASE_PUBLISHABLE_KEY"]!;
-  return createClient(process.env["SUPABASE_URL"]!, key, {
+  const key =
+    cleanEnv(import.meta.env["VITE_SUPABASE_PUBLISHABLE_KEY"]) ??
+    cleanEnv(process.env["SUPABASE_PUBLISHABLE_KEY"])!;
+  const url =
+    cleanEnv(import.meta.env["VITE_SUPABASE_URL"]) ?? cleanEnv(process.env["SUPABASE_URL"])!;
+  return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
     global: {
       fetch: (input, init) => {
@@ -1095,8 +1112,11 @@ const PHOTO_CACHE_SECONDS = "31536000";
 
 // Address prefix of the shop's own uploaded photos. Light copies live in its thumbs/ folder,
 // under the same file name (see src/lib/photos.ts).
+// The address is read the same way publicClient() reads it, so both always agree.
 function photoPrefix() {
-  return `${process.env["SUPABASE_URL"]!.replace(/\/+$/, "")}/storage/v1/object/public/menu-photos/`;
+  const url =
+    cleanEnv(import.meta.env["VITE_SUPABASE_URL"]) ?? cleanEnv(process.env["SUPABASE_URL"])!;
+  return `${url.replace(/\/+$/, "")}/storage/v1/object/public/menu-photos/`;
 }
 
 // File name of one of the shop's own photos, or null for any other address.
@@ -1197,16 +1217,16 @@ export const fetchPhotoForThumb = createServerFn({ method: "POST" })
 
 const DEFAULT_STORY = {
   story_label: "قصتنا",
-  story_title: "لمسة Glamour في كل تفصيلة",
+  story_title: "لمسة فينيسيا في كل تفصيلة",
   story_text:
-    "من شغفنا بالجمال إلى وجهتكِ المفضلة لمستحضرات التجميل، نختار لكِ أفضل منتجات المكياج والعناية بالبشرة لتشعري بالثقة والتألق كل يوم.",
+    "من شغفنا بالجمال إلى وجهتكِ المفضلة في بنغازي، نختار لكِ أفضل العطور ومواد الزينة والباروكات لتشعري بالثقة والتألق كل يوم.",
 };
 
 export type Promotion = { id: string; image_url: string; ratio: number | null; sort_order: number };
 
 export const DEFAULT_HERO = {
   hero_title: "جمالك يبدأ من هنا",
-  hero_subtitle: "مكياج، عناية بالبشرة وعطور مختارة بعناية — كل ما تحتاجينه لتتألقي كل يوم.",
+  hero_subtitle: "عطور ومواد الزينة وباروكات مختارة بعناية — كل ما تحتاجينه لتتألقي كل يوم.",
 };
 
 type SettingsRow = {
