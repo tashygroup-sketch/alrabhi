@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Check, Plus, Search, ShoppingBag, X } from "lucide-react";
+import { ArrowRight, Check, MapPin, Plus, Search, ShoppingBag, X } from "lucide-react";
 import {
   coverImage,
   effectivePrice,
@@ -39,6 +39,10 @@ const categoriesQuery = queryOptions({
 //   ?p=<product id>   the product sheet (also a shareable link to that product)
 //   ?panel=cart|order the cart / the order form
 type HomeSearch = { cat?: string; p?: string; panel?: "cart" | "order" };
+
+// The shop's address, shown at the bottom of the page; tapping it opens the location in Maps.
+const STORE_ADDRESS = "ليبيا - بنغازي شارع الجود، شارع عشرين";
+const STORE_MAP_URL = "https://maps.app.goo.gl/ACCgNhvSPBZZY6Wz9";
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>): HomeSearch => {
@@ -94,7 +98,6 @@ function Home() {
   const cartOpen = panel === "cart";
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [limitHit, setLimitHit] = useState<string | null>(null);
-  const [menuPrompt, setMenuPrompt] = useState(false);
   const [query, setQuery] = useState("");
   // the product the customer just jumped to with the letter list (outlined for a moment)
   const [jumpedTo, setJumpedTo] = useState<string | null>(null);
@@ -317,16 +320,6 @@ function Home() {
     setQuery("");
     navigate({ to: "/", search: name ? { cat: name } : {}, resetScroll: false });
     scrollToShop();
-  }
-
-  function handleBookingRequest() {
-    if (lines.length > 0) {
-      setCartOpen(true);
-      return;
-    }
-    setMenuPrompt(true);
-    scrollToShop();
-    window.setTimeout(() => setMenuPrompt(false), 3500);
   }
 
   useLockScroll(cartOpen);
@@ -615,15 +608,6 @@ function Home() {
         </div>
 
         <div className="mx-auto min-h-[60vh] max-w-5xl px-4 pt-6 pb-16">
-          {menuPrompt && (
-            <p
-              role="status"
-              className="animate-fade-in mx-auto mb-5 w-fit rounded-xl border border-primary/30 bg-accent px-5 py-3 text-center font-medium text-accent-foreground"
-            >
-              اختاروا منتجًا أولاً
-            </p>
-          )}
-
           {results ? (
             results.length > 0 ? (
               <PhotoGroup key="search">
@@ -733,13 +717,16 @@ function Home() {
         </a>
         <p className="mt-4 text-white/75">توصيل لجميع أنحاء ليبيا</p>
         <SocialLinks className="mt-6" />
-        <button
-          type="button"
-          onClick={handleBookingRequest}
-          className="mt-9 h-12 rounded-full bg-white px-9 font-extrabold text-primary"
+        {/* the shop's location: opens Google Maps */}
+        <a
+          href={STORE_MAP_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-9 inline-flex max-w-full items-center gap-2 rounded-3xl bg-white px-7 py-3 leading-6 font-extrabold text-primary"
         >
-          اطلبوا الآن
-        </button>
+          <MapPin className="h-5 w-5 shrink-0" aria-hidden />
+          <span>{STORE_ADDRESS}</span>
+        </a>
         <p className="mt-10 text-xs text-white/50">© الرابحي للمفروشات</p>
       </footer>
 
