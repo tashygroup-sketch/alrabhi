@@ -64,16 +64,16 @@ export const Route = createFileRoute("/")({
     ]),
   head: () => ({
     meta: [
-      { title: "Glamour with Jannat | مكياج وعناية بالبشرة" },
+      { title: "فينيسيا | عطور ومواد الزينة والباروكات" },
       {
         name: "description",
         content:
-          "Glamour with Jannat — مكياج، عناية بالبشرة، عطور وعناية بالشعر. توصيل لجميع أنحاء ليبيا، اطلبي عبر واتساب.",
+          "فينيسيا بنغازي — عطور ومواد الزينة والباروكات. توصيل لجميع أنحاء ليبيا، اطلبي عبر واتساب.",
       },
-      { property: "og:title", content: "Glamour with Jannat" },
+      { property: "og:title", content: "فينيسيا" },
       {
         property: "og:description",
-        content: "جمالك يستحق الأفضل — تسوّقي الآن من Glamour with Jannat.",
+        content: "جمالك يستحق الأفضل — تسوّقي الآن من فينيسيا.",
       },
     ],
   }),
@@ -474,11 +474,10 @@ function Home() {
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <button
             type="button"
-            dir="ltr"
             onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-            className="font-logo text-[22px] leading-none font-black tracking-tight text-primary"
+            className="font-logo text-[28px] leading-none font-semibold text-primary"
           >
-            GLAMOUR
+            فينيسيا
           </button>
           <button
             type="button"
@@ -517,13 +516,16 @@ function Home() {
             {story.hero_title && (
               <p className="text-[15px] font-medium text-white/90">{story.hero_title}</p>
             )}
-            {/* set like the logo: heavy GLAMOUR, signature "With Jannat" tucked under it */}
-            <h1 dir="ltr" className="mt-3 text-right">
-              <span className="font-logo block text-[clamp(2.6rem,15.5vw,4.25rem)] leading-[0.95] font-black tracking-tight whitespace-nowrap md:text-[6.5vw] lg:text-[5.25rem]">
-                GLAMOUR
+            {/* set like the logo: heavy Arabic name, spaced Latin name under it */}
+            <h1 className="mt-3">
+              <span className="font-logo block text-[clamp(3.25rem,19vw,5.25rem)] leading-[1.15] font-semibold md:text-[8vw] lg:text-[6.25rem]">
+                فينيسيا
               </span>
-              <span className="font-script -mt-1 block text-[clamp(2.25rem,11vw,3.25rem)] leading-none font-normal text-white/95 md:text-6xl">
-                With Jannat
+              <span
+                dir="ltr"
+                className="-mr-[0.4em] block text-right text-sm font-medium tracking-[0.4em] text-white/90 md:text-base"
+              >
+                VENICE
               </span>
             </h1>
             {story.hero_subtitle && (
@@ -550,12 +552,7 @@ function Home() {
                 />
               </div>
               <div className="flex items-center justify-between px-3 pb-1">
-                <span
-                  dir="ltr"
-                  className="font-logo text-xs font-black tracking-tight text-primary"
-                >
-                  GLAMOUR
-                </span>
+                <span className="font-logo text-base font-semibold text-primary">فينيسيا</span>
                 <span className="text-xs text-muted-foreground">عروضنا</span>
               </div>
             </div>
@@ -747,9 +744,9 @@ function Home() {
             <path d="M3.5 20.5 4.8 16A8.5 8.5 0 1 1 8 19.3Z" />
             <path d="M9.2 8.3c.3-.5.8-.5 1.1 0l.8 1.4c.2.3.1.7-.1 1l-.5.5c.5 1.1 1.4 2 2.5 2.5l.5-.5c.3-.2.7-.3 1-.1l1.4.8c.5.3.5.8 0 1.1-1 .9-2.4.9-3.6.2a9 9 0 0 1-3.3-3.3c-.7-1.2-.7-2.6.2-3.4Z" />
           </svg>
-          <span dir="ltr">0918640785</span>
+          <span dir="ltr">0923088051</span>
         </a>
-        <p className="mt-4 text-white/75">ليبيا، طرابلس - توصيل جميع أنحاء ليبيا</p>
+        <p className="mt-4 text-white/75">ليبيا، بنغازي - توصيل جميع أنحاء ليبيا</p>
         <SocialLinks className="mt-6" />
         <button
           type="button"
@@ -758,7 +755,7 @@ function Home() {
         >
           اطلبي الآن
         </button>
-        <p className="mt-10 text-xs text-white/50">© Glamour with Jannat</p>
+        <p className="mt-10 text-xs text-white/50">© فينيسيا</p>
       </footer>
 
       {/* cart drawer */}
