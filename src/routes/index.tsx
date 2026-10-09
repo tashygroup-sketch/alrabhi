@@ -203,6 +203,11 @@ function Home() {
     [searchIndex, query],
   );
 
+  // The "أ – ي" button shows in every category that has products — also when they all start
+  // with the same letter — so customers always find it there (hidden only while searching,
+  // since search results are ordered by best match).
+  const showLetters = !!activeCategory && !results && categoryItems.length > 0;
+
   // null = stock not tracked.
   const productById = new Map(menu.map((m) => [m.id, m]));
   function remainingFor(id: string) {
@@ -559,9 +564,7 @@ function Home() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={
-                    activeCategory && !results && categoryLetters.length > 1
-                      ? "ابحثوا عن منتج / Search"
-                      : "ابحثوا عن منتج، لون أو قسم / Search"
+                    showLetters ? "ابحثوا عن منتج / Search" : "ابحثوا عن منتج، لون أو قسم / Search"
                   }
                   className="h-12 w-full rounded-full border border-border bg-card ps-11 pe-11 text-[16px] text-ink outline-none placeholder:text-muted-foreground focus:border-primary"
                 />
@@ -576,9 +579,7 @@ function Home() {
                   </button>
                 )}
               </label>
-              {activeCategory && !results && categoryLetters.length > 1 && (
-                <LetterPicker letters={categoryLetters} onPick={jumpToLetter} />
-              )}
+              {showLetters && <LetterPicker letters={categoryLetters} onPick={jumpToLetter} />}
             </div>
 
             {activeCategory && !results && (
