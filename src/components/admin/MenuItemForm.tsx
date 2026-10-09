@@ -628,7 +628,7 @@ export function MenuItemForm({
           <input
             dir="auto"
             value={draft.discount_code}
-            placeholder="مثال: VENICE10"
+            placeholder="مثال: RABHI10"
             onChange={(e) => {
               setDiscountError(null);
               setDraft((d) => ({ ...d, discount_code: e.target.value }));

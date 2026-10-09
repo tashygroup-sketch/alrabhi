@@ -243,7 +243,7 @@ export function MenuPanel({ phone }: { phone: string }) {
             image_ratio: draft.image_ratio,
             extra_images: draft.extra_images,
             extra_image_ratios: draft.extra_image_ratios,
-            category: draft.category || "مكياج",
+            category: draft.category || "مفروشات",
             sort_order: Number(draft.sort_order) || 0,
             stock: draft.stock.trim() === "" ? null : Math.max(0, Math.floor(Number(draft.stock))),
             variables: draft.variables.map((v) => ({
