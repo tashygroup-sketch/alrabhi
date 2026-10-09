@@ -6,7 +6,7 @@ import { hasValueStock, overStockValue, parseStock, totalFromValues } from "@/li
 import { LIBYAN_MOBILE, normalizeLibyanPhone } from "@/lib/phone";
 import { codePriceFor, parseValuePrice, salePriceFor } from "@/lib/pricing";
 
-export const WHATSAPP_NUMBER = "218923088051";
+export const WHATSAPP_NUMBER = "218935533599";
 
 // A product's own options, e.g. { name: "اللون", values: [{ label: "أحمر", image_url, stock, price }] }.
 // When a product has any, the customer must pick one value from each before ordering.
@@ -196,6 +196,24 @@ function isActive(endsAt: string | null) {
 
 // PostgREST error codes for "that column doesn't exist (yet)". Lets the site keep working in
 // the window between shipping this code and running the matching database migration.
+// The database is missing a table, column or function this code needs. The message names the
+// Supabase project the site is really connected to (each store has its own), so the SQL is
+// run in the right one, and keeps the technical reason at the end for diagnosing.
+function sqlNeeded(error?: { message?: string } | null) {
+  let project = "";
+  try {
+    project = new URL(process.env["SUPABASE_URL"] ?? "").hostname.split(".")[0] ?? "";
+  } catch {
+    project = "";
+  }
+  return new Error(
+    `قاعدة البيانات ينقصها تحديث: شغّلي ملف alrabhi-database.sql في Supabase (SQL Editor)` +
+      (project ? ` داخل المشروع ${project}` : "") +
+      ` ثم حاولي مرة أخرى.` +
+      (error?.message ? ` (${error.message})` : ""),
+  );
+}
+
 function isMissingColumn(error: { code?: string; message?: string } | null) {
   if (!error) return false;
   return (
@@ -262,26 +280,9 @@ export const ORDER_STATUSES = ["جديد", "قيد التحضير", "جاهز ل
 export const DELIVERED = "تم التسليم";
 const NEW_ORDER = "جديد";
 
-// A value pasted into Cloudflare can carry quotes copied from .env, spaces or a line break;
-// any of these makes Supabase answer "Invalid API key". Strip them.
-function cleanEnv(value: string | undefined): string | undefined {
-  const v = value
-    ?.trim()
-    .replace(/^["']|["']$/g, "")
-    .trim();
-  return v || undefined;
-}
-
-// The storefront's read-only client. Uses the public URL and key baked in at build time from
-// .env first (they ship to every browser anyway), and Cloudflare's runtime values only as a
-// fallback, so a mistyped or wiped Cloudflare variable can't take the shop down.
 function publicClient() {
-  const key =
-    cleanEnv(import.meta.env["VITE_SUPABASE_PUBLISHABLE_KEY"]) ??
-    cleanEnv(process.env["SUPABASE_PUBLISHABLE_KEY"])!;
-  const url =
-    cleanEnv(import.meta.env["VITE_SUPABASE_URL"]) ?? cleanEnv(process.env["SUPABASE_URL"])!;
-  return createClient(url, key, {
+  const key = process.env["SUPABASE_PUBLISHABLE_KEY"]!;
+  return createClient(process.env["SUPABASE_URL"]!, key, {
     auth: { persistSession: false, autoRefreshToken: false },
     global: {
       fetch: (input, init) => {
@@ -365,7 +366,7 @@ export const getMenu = createServerFn({ method: "GET" }).handler(async () => {
       discount: discounts.has(row.id!) ? { ends_at: discounts.get(row.id!) ?? null } : null,
     })) as MenuItem[];
   }
-  throw new Error("تعذّر تحميل المنيو");
+  throw new Error("تعذّر تحميل المنتجات");
 });
 
 // Customer typed a code for one product. Returns the discounted price only on an exact match
@@ -437,7 +438,7 @@ export const createOrder = createServerFn({ method: "POST" })
     }
     if (!address) throw new Error("العنوان مطلوب");
     if (!Array.isArray(data.items) || data.items.length === 0) {
-      throw new Error("اختر صنفًا واحدًا على الأقل من المنيو");
+      throw new Error("اختاروا منتجًا واحدًا على الأقل");
     }
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -531,8 +532,8 @@ export const createOrder = createServerFn({ method: "POST" })
             if (!pick || !v.values.some((val) => val.label === pick.value)) {
               throw new Error(
                 pick
-                  ? `الخيار "${pick.value}" لم يعد متوفرًا في "${row.name}"، احذفيه من السلة وأضيفيه من جديد`
-                  : `اختاري ${v.name} للمنتج "${row.name}"`,
+                  ? `الخيار "${pick.value}" لم يعد متوفرًا في "${row.name}"، احذفوه من السلة وأضيفوه من جديد`
+                  : `اختاروا ${v.name} للمنتج "${row.name}"`,
               );
             }
             chosen.push({ name: v.name, value: pick.value });
@@ -559,17 +560,17 @@ export const createOrder = createServerFn({ method: "POST" })
           const d = discounts.get(row.id);
           if (!d || normalizeCode(d.code) !== normalizeCode(typed)) {
             throw new Error(
-              `كود الخصم على "${row.name}" غير صحيح، احذفيه من السلة وأضيفيه من جديد`,
+              `كود الخصم على "${row.name}" غير صحيح، احذفوه من السلة وأضيفوه من جديد`,
             );
           }
           if (!isActive(d.ends_at)) {
-            throw new Error(`انتهى الخصم على "${row.name}"، احذفيه من السلة وأضيفيه من جديد`);
+            throw new Error(`انتهى الخصم على "${row.name}"، احذفوه من السلة وأضيفوه من جديد`);
           }
           price = codePriceFor(priced, clean.options, d.discount_price);
           clean.discount_code = d.code;
         }
         if (Math.abs(price - clean.price) > 0.005) {
-          throw new Error(`تغيّر سعر "${row.name}"، احذفيه من السلة وأضيفيه من جديد`);
+          throw new Error(`تغيّر سعر "${row.name}"، احذفوه من السلة وأضيفوه من جديد`);
         }
         clean.price = price;
       });
@@ -962,11 +963,7 @@ export const saveMenuItem = createServerFn({ method: "POST" })
       // Quantities per value are only safe once the database can deduct them on each order.
       // Calling the function with an empty order changes nothing; it only proves it exists.
       const { error: fnError } = await db.rpc(RESERVE_V2, { p_items: [] });
-      if (fnError?.code === "PGRST202") {
-        throw new Error(
-          "لحفظ كمية لكل قيمة شغّلي ملف تحديث قاعدة البيانات الجديد (value_stock) في Supabase أولاً",
-        );
-      }
+      if (fnError?.code === "PGRST202") throw sqlNeeded(fnError);
       if (fnError) throw new Error(fnError.message);
     }
     // A product saved with extra photos but no main photo gets its first extra photo as the
@@ -995,7 +992,7 @@ export const saveMenuItem = createServerFn({ method: "POST" })
       image_ratio: mainRatio,
       extra_images: extraImages,
       extra_image_ratios: extraRatios,
-      category: data.item.category?.trim().slice(0, 60) || "مكياج",
+      category: data.item.category?.trim().slice(0, 60) || "مفروشات",
       sort_order: Number(data.item.sort_order) || 0,
       is_available: data.item.is_available ?? true,
       // With quantities per value, the total is calculated from them (never typed by hand).
@@ -1048,11 +1045,8 @@ export const saveMenuItem = createServerFn({ method: "POST" })
 
     // Newer columns may not be migrated onto the live database yet. Retry without them one
     // generation at a time, but never silently drop a setting the owner actually used.
-    const needMigration = () =>
-      new Error(
-        "شغّلي ملفات تحديث قاعدة البيانات الجديدة في Supabase (SQL Editor) ثم احفظي مرة أخرى",
-      );
     let result = await write(payload);
+    const needMigration = () => sqlNeeded(result.error);
     if (isMissingColumn(result.error)) {
       if (payload.sale_price !== null) throw needMigration();
       const { sale_price: _sale, ...noSale } = payload;
@@ -1088,9 +1082,8 @@ export const saveMenuItem = createServerFn({ method: "POST" })
       if (discountError) {
         if (!isMissingColumn(discountError)) throw new Error(discountError.message);
         if (discount) {
-          throw new Error(
-            "تم حفظ المنتج، لكن لحفظ كود الخصم شغّلي ملف تحديث قاعدة البيانات الجديد في Supabase أولاً",
-          );
+          const why = sqlNeeded(discountError);
+          throw new Error(`تم حفظ المنتج، لكن كود الخصم لم يُحفظ. ${why.message}`);
         }
       }
     }
@@ -1112,11 +1105,8 @@ const PHOTO_CACHE_SECONDS = "31536000";
 
 // Address prefix of the shop's own uploaded photos. Light copies live in its thumbs/ folder,
 // under the same file name (see src/lib/photos.ts).
-// The address is read the same way publicClient() reads it, so both always agree.
 function photoPrefix() {
-  const url =
-    cleanEnv(import.meta.env["VITE_SUPABASE_URL"]) ?? cleanEnv(process.env["SUPABASE_URL"])!;
-  return `${url.replace(/\/+$/, "")}/storage/v1/object/public/menu-photos/`;
+  return `${process.env["SUPABASE_URL"]!.replace(/\/+$/, "")}/storage/v1/object/public/menu-photos/`;
 }
 
 // File name of one of the shop's own photos, or null for any other address.
@@ -1217,16 +1207,16 @@ export const fetchPhotoForThumb = createServerFn({ method: "POST" })
 
 const DEFAULT_STORY = {
   story_label: "قصتنا",
-  story_title: "لمسة فينيسيا في كل تفصيلة",
+  story_title: "لمسة الرابحي في كل بيت",
   story_text:
-    "من شغفنا بالجمال إلى وجهتكِ المفضلة في بنغازي، نختار لكِ أفضل العطور ومواد الزينة والباروكات لتشعري بالثقة والتألق كل يوم.",
+    "نختار لكم مفروشات بخامات مريحة وتصاميم أنيقة، لتجدوا في بيتكم الراحة التي تستحقونها كل يوم.",
 };
 
 export type Promotion = { id: string; image_url: string; ratio: number | null; sort_order: number };
 
 export const DEFAULT_HERO = {
-  hero_title: "جمالك يبدأ من هنا",
-  hero_subtitle: "عطور ومواد الزينة وباروكات مختارة بعناية — كل ما تحتاجينه لتتألقي كل يوم.",
+  hero_title: "راحة بيتك تبدأ من هنا",
+  hero_subtitle: "مفروشات مختارة بعناية — كل ما يحتاجه بيتك ليكون أكثر راحة وأناقة.",
 };
 
 type SettingsRow = {
@@ -1342,7 +1332,7 @@ export const saveHeroImage = createServerFn({ method: "POST" })
       .from("site_settings")
       .upsert({ id: 1, hero_image_url: data.hero_image_url?.trim() || null });
     if (isMissingColumn(error)) {
-      throw new Error("يرجى تشغيل تحديث قاعدة البيانات أولاً (Supabase → SQL Editor)");
+      throw sqlNeeded(error);
     }
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -1376,7 +1366,7 @@ export const saveCategoryImage = createServerFn({ method: "POST" })
         { onConflict: "name" },
       );
     if (isMissingColumn(error)) {
-      throw new Error("شغّلي ملف تحديث قاعدة البيانات الجديد في Supabase (SQL Editor) أولاً");
+      throw sqlNeeded(error);
     }
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -1393,7 +1383,7 @@ export const saveHeroText = createServerFn({ method: "POST" })
       hero_subtitle: (data.hero_subtitle ?? "").trim().slice(0, 400),
     });
     if (isMissingColumn(error)) {
-      throw new Error("يرجى تشغيل تحديث قاعدة البيانات أولاً (Supabase → SQL Editor)");
+      throw sqlNeeded(error);
     }
     if (error) throw new Error(error.message);
     return { ok: true };
